@@ -1,8 +1,12 @@
-# Telegram Voice Forwarder
+# Telegram Voice Forwarder and Notifications
 
 This tool monitors one or more Telegram chats with your personal Telegram
 account and publishes new voice messages to a private channel through a bot.
 Audio files are never downloaded locally.
+
+The repository also contains an independent `telegram_notifications` package
+for general Telegram notifications. It does not import or share runtime code
+with the voice-message forwarder.
 
 ## Requirements
 
@@ -73,6 +77,80 @@ Audio files are never downloaded locally.
    ```powershell
    python -m telegram_voice_forwarder run
    ```
+
+## General Telegram notifications
+
+General notifications use the same Bot API token but a separate target chat.
+Configure `TELEGRAM_GENERAL_NOTIFICATION_CHAT` in `.env`; leave
+`TELEGRAM_TARGET_CHAT` reserved for forwarded voice messages. The bot must be
+allowed to send messages in the general target chat. For a private chat, open
+the bot chat and press Start; for a group or channel, add the bot with send
+permission.
+
+Send a test message with the independent notification package:
+
+```powershell
+python -m telegram_notifications send-test
+```
+
+The Codex/Work rate-limit monitor runs as a separate process:
+
+```powershell
+python -m telegram_notifications run
+```
+
+For every polling interval, it starts a fresh local `codex app-server`, reads
+the authenticated Codex rate limits, and immediately stops that process again.
+It observes the `codex` primary bucket with a 300-minute window. A Telegram
+message is sent five minutes before the predicted 5-hour reset and again at
+the predicted reset time. A one-time confirmation poll runs 15 seconds after
+that reset, then the regular interval resumes. The
+monitor stores its last observation in
+`CODEX_NOTIFICATION_STATE` so restarting it does not create a false initial
+notification. `CODEX_RATE_LIMIT_POLL_SECONDS` defaults to 1,800 seconds
+(30 minutes). If the 5-hour window is still completely unused, no reset timer
+or confirmation poll is scheduled.
+
+The monitor appends runtime messages to
+`data/logs/telegram-notifications.log`. Override this location with
+`TELEGRAM_NOTIFICATION_LOG` when needed; no log rotation is applied.
+At startup, it writes the current primary and secondary usage windows (normally
+the 5-hour and weekly limits) to the console.
+
+The app-server must be available on the machine running this command and must
+be signed in to the ChatGPT account whose Codex/Work usage should be monitored.
+If the executable is not available as `codex` on `PATH`, set
+`CODEX_APP_SERVER_EXECUTABLE` to its literal absolute path. This avoids shell
+quoting issues on Windows, for example:
+
+```dotenv
+CODEX_APP_SERVER_EXECUTABLE=D:\Tools\01_portable\OpenAI.Codex_Microsoft.Winget.Source_8wekyb3d8bbwe\codex-x86_64-pc-windows-msvc.exe
+```
+
+`CODEX_APP_SERVER_EXECUTABLE` takes precedence over the advanced
+`CODEX_APP_SERVER_COMMAND` setting.
+
+The `send` command is available for future general notification sources:
+
+### Windows autostart
+
+The notification monitor needs the current user's Codex login. Therefore, on
+Windows it is installed as a per-user Task Scheduler task rather than a system
+service. It starts at logon, has no execution time limit, and restarts after a
+failure. It uses `pythonw.exe`, so no console window is shown. Run the
+installer from PowerShell 7.6 or newer:
+
+```powershell
+.\scripts\Install-Windows-TgNotificationsTask.ps1 -StartNow
+```
+
+The task is named `TelegramNotifications`. Re-running the installer safely
+updates its configuration. With `-StartNow`, it also stops an already running
+instance before starting the updated monitor.
+
+```powershell
+python -m telegram_notifications send "Eine eigene Benachrichtigung"
+```
 
 Run commands from the directory containing `.env`. If `TELEGRAM_SESSION` or
 `STATE_DB` is relative and `.env` was loaded from another directory, the tool
