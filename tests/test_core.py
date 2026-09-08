@@ -1,7 +1,7 @@
 import unittest
 from datetime import UTC, datetime, timedelta
 
-from telegram_voice_forwarder.core import (
+from tg_forwarder.core import (
     ActiveBlock,
     BlockCloseReason,
     BlockPolicy,
@@ -10,7 +10,7 @@ from telegram_voice_forwarder.core import (
     ResetPolicy,
     ResetSnapshot,
 )
-from telegram_voice_forwarder.models import ForwardingJob, JobStatus, VoiceBlock
+from tg_forwarder.models import ForwardingJob, JobStatus, VoiceBlock
 
 
 class BlockPolicyTests(unittest.TestCase):

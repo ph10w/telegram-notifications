@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from telegram_notifications.cli import _configure_logging
+from tg_notification.cli import _configure_logging
 
 
 class NotificationCliTests(unittest.TestCase):
@@ -15,7 +15,7 @@ class NotificationCliTests(unittest.TestCase):
                 root_logger.handlers.clear()
                 log_path = Path(directory) / "logs" / "notifications.log"
                 _configure_logging("INFO", log_path)
-                logging.getLogger("telegram_notifications.test").info("test entry")
+                logging.getLogger("tg_notification.test").info("test entry")
 
                 self.assertIn("test entry", log_path.read_text(encoding="utf-8"))
             finally:

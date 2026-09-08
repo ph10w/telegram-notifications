@@ -25,7 +25,7 @@ if (-not (Test-Path -LiteralPath $environmentFile -PathType Leaf)) {
 
 $action = New-ScheduledTaskAction `
     -Execute $pythonExecutable `
-    -Argument '-m telegram_notifications run' `
+    -Argument '-m tg_notification run' `
     -WorkingDirectory $projectDirectory
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $currentUser
 $principal = New-ScheduledTaskPrincipal `

@@ -1,110 +1,23 @@
 import tempfile
 import unittest
-from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock
 
-from telegram_voice_forwarder.config import BaseConfig
-from telegram_voice_forwarder.models import DialogInfo
-from telegram_voice_forwarder.telegram_adapter import (
-    TelethonResetGateway,
-    build_client,
-    load_dialogs,
-    start_client,
-)
+from tg_api.bot_gateway import BotChat, BotIdentity, RelaySession
+from tg_api.telegram_gateway import TelegramGateway
+from tg_setup.models import DialogInfo
+from tg_setup.service import _load_dialogs
 
 
-def config(root: Path) -> BaseConfig:
-    return BaseConfig(
-        api_id=123,
-        api_hash="secret",
-        phone="+4912345",
-        session_path=root / "session",
-        state_db=root / "state.sqlite3",
-        log_level="INFO",
-        entity_cache_limit=250,
-    )
-
-
-class AsyncDialogs:
-    def __init__(self, *dialogs: object) -> None:
-        self._dialogs = dialogs
-
-    def __aiter__(self):
-        async def iterate():
-            for dialog in self._dialogs:
-                yield dialog
-
-        return iterate()
-
-
-class TelegramAdapterTests(unittest.IsolatedAsyncioTestCase):
-    def test_builds_client_from_configuration(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            current = config(Path(temp_dir))
-            with patch(
-                "telegram_voice_forwarder.telegram_adapter.TelegramClient"
-            ) as client_type:
-                client = build_client(current)
-
-            self.assertIs(client, client_type.return_value)
-            client_type.assert_called_once_with(
-                str(current.session_path),
-                123,
-                "secret",
-                auto_reconnect=True,
-                connection_retries=None,
-                retry_delay=2,
-                entity_cache_limit=250,
-            )
-
-    async def test_starts_client_and_returns_account_identity(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            current = config(Path(temp_dir))
-            account = SimpleNamespace(id=42, first_name="Alice", last_name="Example")
-            client = SimpleNamespace(
-                start=AsyncMock(),
-                get_me=AsyncMock(return_value=account),
-            )
-
-            with patch(
-                "telegram_voice_forwarder.telegram_adapter.utils.get_display_name",
-                return_value="Alice Example",
-            ):
-                identity = await start_client(client, current)
-
-            self.assertEqual(identity, ("Alice Example", 42))
-            client.start.assert_awaited_once_with(phone="+4912345")
-
-    async def test_maps_telegram_dialogs_to_transport_neutral_models(self) -> None:
+class TelegramGatewayTests(unittest.IsolatedAsyncioTestCase):
+    def test_maps_gateway_dialogs_to_setup_models(self) -> None:
         dialogs = (
-            SimpleNamespace(
-                id=-1001,
-                name="Group",
-                is_group=True,
-                is_channel=False,
-                is_user=False,
-            ),
-            SimpleNamespace(
-                id=-1002,
-                name="Channel",
-                is_group=False,
-                is_channel=True,
-                is_user=False,
-            ),
-            SimpleNamespace(
-                id=3,
-                name="User",
-                is_group=False,
-                is_channel=False,
-                is_user=True,
-            ),
+            SimpleNamespace(id=-1001, name="Group", is_group=True, is_channel=False, is_user=False),
+            SimpleNamespace(id=-1002, name="Channel", is_group=False, is_channel=True, is_user=False),
+            SimpleNamespace(id=3, name="User", is_group=False, is_channel=False, is_user=True),
         )
-        client = MagicMock()
-        client.iter_dialogs.return_value = AsyncDialogs(*dialogs)
-
-        result = await load_dialogs(client)
+        result = _load_dialogs(dialogs)
 
         self.assertEqual(
             result,
@@ -115,59 +28,75 @@ class TelegramAdapterTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-    async def test_reset_gateway_resolves_boundaries_and_deletes_in_batches(
-        self,
-    ) -> None:
+    async def test_prepares_monitoring_with_one_account_and_relay_setup(self) -> None:
+        account_client = SimpleNamespace(
+            start=AsyncMock(),
+            get_me=AsyncMock(return_value=SimpleNamespace(
+                id=42, first_name="Alice", last_name="Example"
+            )),
+            get_input_entity=AsyncMock(return_value=object()),
+        )
         with tempfile.TemporaryDirectory() as temp_dir:
-            current = config(Path(temp_dir))
-            target = SimpleNamespace(id=3)
-            selected_source = SimpleNamespace(id=2)
-            source = SimpleNamespace(id=1)
-            client = SimpleNamespace(
-                start=AsyncMock(),
-                get_me=AsyncMock(
-                    return_value=SimpleNamespace(id=42, first_name="Alice")
-                ),
-                get_dialogs=AsyncMock(),
-                get_entity=AsyncMock(side_effect=(target, selected_source, source)),
-                get_messages=AsyncMock(return_value=[SimpleNamespace(id=17)]),
-                delete_messages=AsyncMock(),
-                disconnect=AsyncMock(),
+            gateway = TelegramGateway(
+                Path(temp_dir) / "session", 123, "secret",
+                entity_cache_limit=250, bot_token="token", target_chat=-1002,
+                client_factory=Mock(return_value=account_client),
             )
-            cutoff = datetime(2026, 8, 1, tzinfo=UTC)
-            gateway = TelethonResetGateway(client, current)
+            gateway._bot_gateway = SimpleNamespace(
+                start_relay=AsyncMock(return_value=RelaySession(
+                    BotIdentity(9, "publisher_bot"), None
+                ))
+            )
+            identity = await gateway.prepare_monitoring("+4912345")
 
-            with patch(
-                "telegram_voice_forwarder.telegram_adapter.utils.get_peer_id",
-                side_effect=(-1003, -1002, -1001),
-            ):
-                await gateway.start()
-                target_id = await gateway.resolve_target("@target")
-                selected_source_id = await gateway.resolve_source("@selected")
-                boundary = await gateway.boundary_before("@source", cutoff)
-                await gateway.delete_target_messages(tuple(range(1, 102)))
-                await gateway.close()
+        self.assertEqual(identity[1], 42)
+        account_client.start.assert_awaited_once_with(phone="+4912345")
+        account_client.get_input_entity.assert_awaited_once_with(9)
 
-            self.assertEqual(target_id, -1003)
-            self.assertEqual(selected_source_id, -1002)
-            self.assertEqual(boundary, (-1001, 17))
-            client.get_dialogs.assert_awaited_once_with()
-            client.get_messages.assert_awaited_once_with(
-                source,
-                limit=1,
-                offset_date=cutoff,
+    async def test_prepares_reset_with_the_configured_target(self) -> None:
+        account_client = SimpleNamespace(
+            start=AsyncMock(),
+            get_me=AsyncMock(return_value=SimpleNamespace(id=42, first_name="Alice")),
+            get_dialogs=AsyncMock(),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            gateway = TelegramGateway(
+                Path(temp_dir) / "session", 123, "secret",
+                entity_cache_limit=250, bot_token="token", target_chat=-1002,
+                phone="+4912345", client_factory=Mock(return_value=account_client),
             )
-            self.assertEqual(client.delete_messages.await_count, 2)
-            self.assertEqual(
-                client.delete_messages.await_args_list[0].args,
-                (target, list(range(1, 101))),
+            gateway._bot_gateway = SimpleNamespace(
+                resolve_chat=AsyncMock(return_value=BotChat(-1002, "Target", None))
             )
-            self.assertTrue(client.delete_messages.await_args_list[0].kwargs["revoke"])
-            self.assertEqual(
-                client.delete_messages.await_args_list[1].args,
-                (target, [101]),
+            target_id = await gateway.login_resolve_chat(-1002)
+
+        self.assertEqual(target_id, -1002)
+        account_client.start.assert_awaited_once_with(phone="+4912345")
+        account_client.get_dialogs.assert_awaited_once_with()
+        gateway._bot_gateway.resolve_chat.assert_awaited_once_with(-1002)
+
+    async def test_gateway_batches_account_message_deletions(self) -> None:
+        account_client = MagicMock()
+        account_client.delete_messages = AsyncMock()
+        factory = Mock(return_value=account_client)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            gateway = TelegramGateway(
+                Path(temp_dir) / "session", 123, "secret",
+                entity_cache_limit=250, client_factory=factory,
             )
-            client.disconnect.assert_awaited_once_with()
+            target = object()
+            await gateway.delete_messages_in_batches(target, tuple(range(1, 102)))
+
+        self.assertEqual(account_client.delete_messages.await_count, 2)
+        self.assertEqual(
+            account_client.delete_messages.await_args_list[0].args,
+            (target, list(range(1, 101))),
+        )
+        self.assertTrue(account_client.delete_messages.await_args_list[0].kwargs["revoke"])
+        self.assertEqual(
+            account_client.delete_messages.await_args_list[1].args,
+            (target, [101]),
+        )
 
 
 if __name__ == "__main__":

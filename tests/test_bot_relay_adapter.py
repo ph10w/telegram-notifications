@@ -1,112 +1,94 @@
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, call
+from unittest.mock import AsyncMock, Mock
 
 from telethon.tl.types import MessageEntityTextUrl
 
-from telegram_voice_forwarder.bot_relay_adapter import BotRelayClient
+from tg_api.bot_gateway import BotIdentity, RelaySession
+from tg_api.telegram_gateway import TelegramGateway
 
 
-class BotRelayClientTests(unittest.IsolatedAsyncioTestCase):
+def relay(account_client: object) -> TelegramGateway:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        return TelegramGateway(
+            Path(temp_dir) / "session", 123, "secret",
+            entity_cache_limit=250, bot_token="token", target_chat=-1002,
+            client_factory=Mock(return_value=account_client),
+        )
+
+
+class TelegramGatewayRelayTests(unittest.IsolatedAsyncioTestCase):
     async def test_edits_voice_caption_in_target_chat(self) -> None:
-        relay = BotRelayClient(Mock(), SimpleNamespace(), -1002)
-        relay._call = AsyncMock(return_value={"message_id": 88})
-        entity = MessageEntityTextUrl(
-            offset=0, length=4, url="https://example.test"
+        gateway = relay(Mock())
+        gateway._bot_gateway = SimpleNamespace(edit_target_caption=AsyncMock())
+        entity = MessageEntityTextUrl(offset=0, length=4, url="https://example.test")
+
+        await gateway.edit_caption(object(), 88, "text", [entity])
+
+        gateway._bot_gateway.edit_target_caption.assert_awaited_once_with(
+            88, "text", [{
+                "type": "text_link", "offset": 0, "length": 4,
+                "url": "https://example.test",
+            }]
         )
 
-        await relay.edit_caption(object(), 88, "text", [entity])
-
-        relay._call.assert_awaited_once_with(
-            "editMessageCaption",
-            chat_id=-1002,
-            message_id=88,
-            caption="text",
-            caption_entities=[
-                {
-                    "type": "text_link",
-                    "offset": 0,
-                    "length": 4,
-                    "url": "https://example.test",
-                }
-            ],
+    async def test_starts_private_relay_with_its_own_account_client(self) -> None:
+        account_client = SimpleNamespace(
+            get_input_entity=AsyncMock(return_value=object()), get_entity=AsyncMock(),
+        )
+        gateway = relay(account_client)
+        gateway._bot_gateway = SimpleNamespace(
+            start_relay=AsyncMock(return_value=RelaySession(
+                BotIdentity(9, "publisher_bot"), 42
+            ))
         )
 
-    async def test_starts_private_relay_without_target_access_for_user(self) -> None:
-        source_client = SimpleNamespace(
-            get_input_entity=AsyncMock(return_value=object()),
-            get_entity=AsyncMock(),
-        )
-        relay = BotRelayClient(Mock(), source_client, -1002)
-        relay._call = AsyncMock(
-            side_effect=[
-                {"url": ""},
-                {"id": 9, "username": "publisher_bot"},
-                [{"update_id": 41}],
-            ]
-        )
+        await gateway.start_relay(123)
 
-        await relay.start(123)
+        account_client.get_input_entity.assert_awaited_once_with(9)
+        account_client.get_entity.assert_not_awaited()
+        self.assertEqual(gateway._user_id, 123)
+        self.assertEqual(gateway._offset, 42)
 
-        source_client.get_input_entity.assert_awaited_once_with(9)
-        source_client.get_entity.assert_not_awaited()
-        self.assertEqual(relay._user_id, 123)
-        self.assertEqual(relay._offset, 42)
-
-    async def test_relays_existing_voice_reference_and_deletes_staging_message(
-        self,
-    ) -> None:
+    async def test_relays_existing_voice_and_deletes_staging_message(self) -> None:
         media = object()
-        source_client = SimpleNamespace(
+        account_client = SimpleNamespace(
             send_file=AsyncMock(return_value=SimpleNamespace(id=55)),
             delete_messages=AsyncMock(),
         )
-        relay = BotRelayClient(Mock(), source_client, -1002)
-        relay._user_id = 123
-        relay._bot_entity = object()
-        relay._wait_for_relay = AsyncMock(return_value=77)
-        relay._call = AsyncMock(side_effect=[{"message_id": 88}, True])
+        gateway = relay(account_client)
+        gateway._user_id = 123
+        gateway._bot_entity = object()
+        gateway._wait_for_relay = AsyncMock(return_value=77)
+        gateway._bot_gateway = SimpleNamespace(
+            copy_relay_message=AsyncMock(return_value=88),
+            delete_private_message=AsyncMock(),
+        )
         message = SimpleNamespace(voice=media, video_note=None)
         entities = [MessageEntityTextUrl(offset=0, length=4, url="https://example.test")]
 
-        result = await relay.copy_message(
-            -1001,
-            10,
-            message,
-            caption="date",
-            entities=entities,
+        result = await gateway.copy_message(
+            -1001, 10, message, caption="date", entities=entities
         )
 
         self.assertEqual(result.id, 88)
-        source_client.send_file.assert_awaited_once()
-        send_args, send_kwargs = source_client.send_file.await_args
-        self.assertEqual(send_args, (relay._bot_entity, media))
+        account_client.send_file.assert_awaited_once()
+        send_args, send_kwargs = account_client.send_file.await_args
+        self.assertEqual(send_args, (gateway._bot_entity, media))
         self.assertTrue(send_kwargs["caption"].startswith("telegram-voice-forwarder:"))
         self.assertTrue(send_kwargs["silent"])
         self.assertTrue(send_kwargs["voice_note"])
-        self.assertEqual(
-            relay._call.await_args_list,
-            [
-                call(
-                    "copyMessage",
-                    chat_id=-1002,
-                    from_chat_id=123,
-                    message_id=77,
-                    disable_notification=False,
-                    caption="date",
-                    caption_entities=[
-                        {
-                            "type": "text_link",
-                            "offset": 0,
-                            "length": 4,
-                            "url": "https://example.test",
-                        }
-                    ],
-                ),
-                call("deleteMessage", chat_id=123, message_id=77),
-            ],
+        gateway._bot_gateway.copy_relay_message.assert_awaited_once_with(
+            123, 77, caption="date", is_voice=True,
+            entities=[{
+                "type": "text_link", "offset": 0, "length": 4,
+                "url": "https://example.test",
+            }],
         )
-        source_client.delete_messages.assert_not_awaited()
+        gateway._bot_gateway.delete_private_message.assert_awaited_once_with(123, 77)
+        account_client.delete_messages.assert_not_awaited()
 
 
 if __name__ == "__main__":

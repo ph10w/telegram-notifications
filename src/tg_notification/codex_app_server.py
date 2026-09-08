@@ -150,7 +150,7 @@ class CodexAppServerClient:
                 "initialize",
                 {
                     "clientInfo": {
-                        "name": "telegram_notifications",
+                        "name": "tg_notification",
                         "title": "Telegram Notifications",
                         "version": "0.1.0",
                     }

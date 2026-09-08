@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from telegram_notifications.codex_app_server import (
+from tg_notification.codex_app_server import (
     CodexAppServerRateLimitReader,
     _app_server_subprocess_options,
     extract_rate_limit_snapshot,
@@ -87,11 +87,11 @@ class ExtractRateLimitWindowsTests(unittest.TestCase):
 
 class AppServerSubprocessOptionsTests(unittest.TestCase):
     def test_hides_the_app_server_console_on_windows(self) -> None:
-        with patch("telegram_notifications.codex_app_server.sys.platform", "win32"):
+        with patch("tg_notification.codex_app_server.sys.platform", "win32"):
             self.assertIn("creationflags", _app_server_subprocess_options())
 
     def test_omits_windows_options_on_other_platforms(self) -> None:
-        with patch("telegram_notifications.codex_app_server.sys.platform", "linux"):
+        with patch("tg_notification.codex_app_server.sys.platform", "linux"):
             self.assertEqual(_app_server_subprocess_options(), {})
 
 

@@ -53,10 +53,3 @@ class VoiceBlock:
     last_observed_message_id: int
     last_voice_at: datetime
     closed_at_message_id: int | None
-
-
-@dataclass(frozen=True, slots=True)
-class DialogInfo:
-    id: int
-    kind: str
-    name: str

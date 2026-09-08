@@ -28,8 +28,7 @@ async def reset_scan_state(
 ) -> ResetResult:
     cutoff = (now or datetime.now(UTC)) - period if period is not None else None
     try:
-        await telegram.start()
-        target_chat_id = await telegram.resolve_target(config.target_chat)
+        target_chat_id = await telegram.login_resolve_chat(config.target_chat)
 
         boundaries: dict[int, int] | None = None
         source_ids: frozenset[int] | None = None

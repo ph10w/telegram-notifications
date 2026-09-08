@@ -14,8 +14,9 @@ dependencies = [
 ]
 
 [project.scripts]
-telegram-voice-forwarder = "telegram_voice_forwarder.cli:main"
-telegram-notifications = "telegram_notifications.cli:main"
+tg-forwarder = "tg_forwarder.cli:main"
+tg-notification = "tg_notification.cli:main"
+tg-setup = "tg_setup.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

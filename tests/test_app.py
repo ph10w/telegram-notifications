@@ -9,7 +9,14 @@ from unittest.mock import AsyncMock, patch
 from telethon import helpers, utils
 from telethon.tl.types import Channel, Chat, PeerChannel, PeerUser
 
-from telegram_voice_forwarder.app import (
+from tg_api.telegram_gateway import (
+    BotTarget,
+    ResolvedChat,
+    ResolvedChats,
+    TelegramGateway,
+)
+
+from tg_forwarder.app import (
     ResolvedSource,
     VoiceForwarder,
     linked_caption,
@@ -17,11 +24,10 @@ from telegram_voice_forwarder.app import (
     source_kind,
     telegram_message_link,
 )
-from telegram_voice_forwarder.config import ForwarderConfig
-from telegram_voice_forwarder.core import ResetPolicy, SourceKind
-from telegram_voice_forwarder.models import JobStatus
-from telegram_voice_forwarder.state import StateStore
-from telegram_voice_forwarder.telegram_adapter import build_client
+from tg_forwarder.config import ForwarderConfig
+from tg_forwarder.core import ResetPolicy, SourceKind
+from tg_forwarder.models import JobStatus
+from tg_forwarder.state import StateStore
 
 
 def test_config(root: Path) -> ForwarderConfig:
@@ -66,9 +72,15 @@ class VoiceForwarderTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             config = test_config(Path(temp_dir))
             with patch(
-                "telegram_voice_forwarder.telegram_adapter.TelegramClient"
+                "tg_api.telegram_gateway.TelegramClient"
             ) as client_class:
-                build_client(config)
+                TelegramGateway(
+                    config.session_path,
+                    config.api_id,
+                    config.api_hash,
+                    entity_cache_limit=config.entity_cache_limit,
+                    phone=config.phone,
+                )
 
         self.assertEqual(client_class.call_args.kwargs["entity_cache_limit"], 500)
 
@@ -208,16 +220,20 @@ class VoiceForwarderTests(unittest.IsolatedAsyncioTestCase):
             date=None,
             megagroup=True,
         )
-        self.client.get_entity = AsyncMock(side_effect=(target, source))
-        self.client.get_dialogs = AsyncMock()
+        self.client.resolve_target_and_sources = AsyncMock(
+            return_value=ResolvedChats(
+                BotTarget(-1002, "Target", None),
+                (ResolvedChat(
+                    -1000000000001, source, "Source", "supergroup"
+                ),),
+            )
+        )
 
         await self.forwarder.resolve_chats()
 
-        self.assertEqual(
-            tuple(call.args[0] for call in self.client.get_entity.await_args_list),
-            (-1002, -1001),
+        self.client.resolve_target_and_sources.assert_awaited_once_with(
+            -1002, (-1001,)
         )
-        self.client.get_dialogs.assert_not_awaited()
         self.assertIs(self.forwarder.sources[-1000000000001].kind, SourceKind.SUPERGROUP)
 
     async def test_channel_voices_are_forwarded_without_collection_block(self) -> None:

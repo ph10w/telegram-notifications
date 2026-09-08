@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from telegram_notifications.codex_monitor import CodexRateLimitMonitor
+from tg_notification.codex_monitor import CodexRateLimitMonitor
 
 
 class RecordingSink:
@@ -123,10 +123,10 @@ class CodexRateLimitMonitorTests(unittest.IsolatedAsyncioTestCase):
             )
             await monitor.observe(_rate_limits(used_percent=100, resets_at=reset_at))
 
-            with patch("telegram_notifications.codex_monitor.time.time", return_value=reset_at - 300):
+            with patch("tg_notification.codex_monitor.time.time", return_value=reset_at - 300):
                 self.assertTrue(await monitor._send_due_scheduled_notifications())
                 self.assertFalse(await monitor._send_due_scheduled_notifications())
-            with patch("telegram_notifications.codex_monitor.time.time", return_value=reset_at):
+            with patch("tg_notification.codex_monitor.time.time", return_value=reset_at):
                 self.assertTrue(await monitor._send_due_scheduled_notifications())
                 self.assertFalse(await monitor._send_due_scheduled_notifications())
 
@@ -153,9 +153,9 @@ class CodexRateLimitMonitorTests(unittest.IsolatedAsyncioTestCase):
                 )
             )
 
-            with patch("telegram_notifications.codex_monitor.time.time", return_value=weekly_reset_at - 300):
+            with patch("tg_notification.codex_monitor.time.time", return_value=weekly_reset_at - 300):
                 self.assertTrue(await monitor._send_due_scheduled_notifications())
-            with patch("telegram_notifications.codex_monitor.time.time", return_value=weekly_reset_at):
+            with patch("tg_notification.codex_monitor.time.time", return_value=weekly_reset_at):
                 self.assertTrue(await monitor._send_due_scheduled_notifications())
 
             self.assertEqual(len(sink.messages), 2)
@@ -195,7 +195,7 @@ class CodexRateLimitMonitorTests(unittest.IsolatedAsyncioTestCase):
                 state_path=Path(directory) / "state.json",
             )
             await monitor.observe(_rate_limits(used_percent=100, resets_at=reset_at))
-            with patch("telegram_notifications.codex_monitor.time.time", return_value=reset_at):
+            with patch("tg_notification.codex_monitor.time.time", return_value=reset_at):
                 await monitor._send_due_scheduled_notifications()
 
             self.assertFalse(
@@ -214,10 +214,10 @@ class CodexRateLimitMonitorTests(unittest.IsolatedAsyncioTestCase):
                 state_path=Path(directory) / "state.json",
             )
             await monitor.observe(_rate_limits(used_percent=100, resets_at=reset_at))
-            with patch("telegram_notifications.codex_monitor.time.time", return_value=reset_at):
+            with patch("tg_notification.codex_monitor.time.time", return_value=reset_at):
                 await monitor._send_due_scheduled_notifications()
             with patch(
-                "telegram_notifications.codex_monitor.time.time",
+                "tg_notification.codex_monitor.time.time",
                 return_value=reset_at + 15,
             ):
                 self.assertTrue(monitor._reset_confirmation_poll_due())
@@ -236,12 +236,12 @@ class CodexRateLimitMonitorTests(unittest.IsolatedAsyncioTestCase):
                 _rate_limits(used_percent=100, resets_at=first_reset_at)
             )
             with patch(
-                "telegram_notifications.codex_monitor.time.time",
+                "tg_notification.codex_monitor.time.time",
                 return_value=first_reset_at,
             ):
                 await monitor._send_due_scheduled_notifications()
             with patch(
-                "telegram_notifications.codex_monitor.time.time",
+                "tg_notification.codex_monitor.time.time",
                 return_value=first_reset_at + 15,
             ):
                 monitor._mark_reset_confirmation_polled()
@@ -249,12 +249,12 @@ class CodexRateLimitMonitorTests(unittest.IsolatedAsyncioTestCase):
                 _rate_limits(used_percent=50, resets_at=second_reset_at)
             )
             with patch(
-                "telegram_notifications.codex_monitor.time.time",
+                "tg_notification.codex_monitor.time.time",
                 return_value=second_reset_at,
             ):
                 await monitor._send_due_scheduled_notifications()
             with patch(
-                "telegram_notifications.codex_monitor.time.time",
+                "tg_notification.codex_monitor.time.time",
                 return_value=second_reset_at + 15,
             ):
                 self.assertTrue(monitor._reset_confirmation_poll_due())
@@ -273,13 +273,13 @@ class CodexRateLimitMonitorTests(unittest.IsolatedAsyncioTestCase):
             await monitor.check_once()
 
             with patch(
-                "telegram_notifications.codex_monitor.time.time",
+                "tg_notification.codex_monitor.time.time",
                 return_value=reset_at - 300,
             ):
                 self.assertIsNone(monitor._seconds_until_scheduled_notification())
                 self.assertFalse(await monitor._send_due_scheduled_notifications())
             with patch(
-                "telegram_notifications.codex_monitor.time.time",
+                "tg_notification.codex_monitor.time.time",
                 return_value=reset_at + 15,
             ):
                 self.assertIsNone(monitor._seconds_until_confirmation_poll())
@@ -322,7 +322,7 @@ class CodexRateLimitMonitorTests(unittest.IsolatedAsyncioTestCase):
                 sink=RecordingSink(),
                 state_path=Path(directory) / "state.json",
             )
-            with patch("telegram_notifications.codex_monitor.LOGGER.info") as info:
+            with patch("tg_notification.codex_monitor.LOGGER.info") as info:
                 await monitor.check_once(report_limits=True)
 
         report = info.call_args.args[1]

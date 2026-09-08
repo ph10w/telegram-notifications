@@ -66,7 +66,7 @@ if not exist "%SESSION_FILE%" (
     echo ERROR: The authorized Telegram session was not found:
     echo   %SESSION_FILE%
     echo Run this command interactively before installing the service:
-    echo   .\.venv\Scripts\python.exe -m telegram_voice_forwarder list-chats
+    echo   tg-setup list-chats
     exit /b 1
 )
 
@@ -112,7 +112,7 @@ echo Creating Windows service %SERVICE_NAME%...
   --log-rotate "bytes=10485760" ^
   --log-retain 5 ^
   --env "PYTHONUNBUFFERED=1" ^
-  -- "%PYTHON_EXE%" -m telegram_voice_forwarder run
+  -- "%PYTHON_EXE%" -m tg_forwarder run
 if errorlevel 1 goto :install_failed
 
 echo Configuring service...

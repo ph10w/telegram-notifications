@@ -7,14 +7,16 @@ from pathlib import Path
 from .codex_app_server import CodexAppServerRateLimitReader
 from .codex_monitor import CodexRateLimitMonitor
 from .config import NotificationConfig, NotificationConfigError
-from .errors import CodexAppServerError, TelegramNotificationError
+from tg_api.bot_gateway import TelegramBotGateway
+from tg_api.errors import TelegramApiError
+
+from .errors import CodexAppServerError
 from .sinks import TelegramNotificationSink
-from .telegram_api import TelegramBotApi
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="telegram-notifications",
+        prog="tg-notification",
         description="Allgemeine Telegram-Benachrichtigungen ausführen.",
     )
     parser.add_argument(
@@ -50,7 +52,7 @@ def _configure_logging(level: str, log_path: Path) -> None:
 
 async def _send_text(config: NotificationConfig, text: str) -> None:
     sink = TelegramNotificationSink(
-        TelegramBotApi(config.bot_token), config.target_chat
+        TelegramBotGateway(config.bot_token, config.target_chat)
     )
     await sink.send_text(text)
 
@@ -75,7 +77,7 @@ def main() -> None:
             asyncio.run(_send_text(config, " ".join(args.message)))
         elif args.command == "run":
             sink = TelegramNotificationSink(
-                TelegramBotApi(config.bot_token), config.target_chat
+                TelegramBotGateway(config.bot_token, config.target_chat)
             )
             monitor = CodexRateLimitMonitor(
                 CodexAppServerRateLimitReader(config.codex_app_server_command),
@@ -90,7 +92,7 @@ def main() -> None:
     except (NotificationConfigError, ValueError) as exc:
         print(f"Konfigurationsfehler: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
-    except (CodexAppServerError, TelegramNotificationError) as exc:
+    except (CodexAppServerError, TelegramApiError) as exc:
         print(f"Benachrichtigungsfehler: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
     except KeyboardInterrupt:

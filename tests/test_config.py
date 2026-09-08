@@ -4,7 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from telegram_voice_forwarder.config import ConfigError, ForwarderConfig, parse_chat_ref
+from tg_forwarder.config import ConfigError, ForwarderConfig, parse_chat_ref
 
 
 class ConfigTests(unittest.TestCase):
@@ -12,11 +12,11 @@ class ConfigTests(unittest.TestCase):
         dotenv_file = Path.cwd() / ".env"
         self.enterContext(
             patch(
-                "telegram_voice_forwarder.config.find_dotenv",
+                "tg_forwarder.config.find_dotenv",
                 return_value=str(dotenv_file),
             )
         )
-        self.enterContext(patch("telegram_voice_forwarder.config.load_dotenv"))
+        self.enterContext(patch("tg_forwarder.config.load_dotenv"))
 
     def test_parse_numeric_and_named_chat_references(self) -> None:
         self.assertEqual(parse_chat_ref(" -100123 "), -100123)
@@ -178,12 +178,12 @@ class ConfigTests(unittest.TestCase):
             with (
                 patch.dict(os.environ, environment, clear=True),
                 patch(
-                    "telegram_voice_forwarder.config.find_dotenv",
+                    "tg_forwarder.config.find_dotenv",
                     return_value=str(dotenv_file),
                 ),
-                patch("telegram_voice_forwarder.config.load_dotenv"),
+                patch("tg_forwarder.config.load_dotenv"),
                 patch(
-                    "telegram_voice_forwarder.config.Path.cwd",
+                    "tg_forwarder.config.Path.cwd",
                     return_value=Path(dotenv_directory, "elsewhere"),
                 ),
             ):
@@ -199,7 +199,7 @@ class ConfigTests(unittest.TestCase):
         }
         with (
             patch.dict(os.environ, environment, clear=True),
-            patch("telegram_voice_forwarder.config.find_dotenv", return_value=""),
+            patch("tg_forwarder.config.find_dotenv", return_value=""),
         ):
             with self.assertRaisesRegex(ConfigError, "keine \\.env gefunden"):
                 ForwarderConfig.from_env()
@@ -218,12 +218,12 @@ class ConfigTests(unittest.TestCase):
             with (
                 patch.dict(os.environ, environment, clear=True),
                 patch(
-                    "telegram_voice_forwarder.config.find_dotenv",
+                    "tg_forwarder.config.find_dotenv",
                     return_value=str(Path(dotenv_directory, ".env")),
                 ),
-                patch("telegram_voice_forwarder.config.load_dotenv"),
+                patch("tg_forwarder.config.load_dotenv"),
                 patch(
-                    "telegram_voice_forwarder.config.Path.cwd",
+                    "tg_forwarder.config.Path.cwd",
                     return_value=Path(dotenv_directory, "elsewhere"),
                 ),
             ):

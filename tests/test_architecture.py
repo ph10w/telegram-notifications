@@ -3,35 +3,38 @@ import unittest
 from pathlib import Path
 
 
-PACKAGE = Path(__file__).parents[1] / "src" / "telegram_voice_forwarder"
+PACKAGE = Path(__file__).parents[1] / "src" / "tg_forwarder"
+SETUP_PACKAGE = Path(__file__).parents[1] / "src" / "tg_setup"
 ALLOWED_DEPENDENCIES = {
     "__init__": set(),
     "__main__": {"cli"},
     "app": {"config", "core", "errors", "ports"},
-    "bot_api": {"errors"},
-    "bot_relay_adapter": {"bot_api", "config", "errors", "telegram_adapter"},
     "bootstrap": {
         "app",
-        "bot_api",
-        "bot_relay_adapter",
         "config",
         "errors",
-        "models",
-        "notification_bot_setup",
         "reset_service",
         "state",
-        "telegram_adapter",
     },
     "cli": {"bootstrap", "config", "errors"},
     "config": set(),
     "core": {"models"},
     "errors": set(),
     "models": set(),
-    "notification_bot_setup": {"bot_api", "errors"},
     "ports": {"core", "models"},
     "reset_service": {"config", "core", "ports"},
     "state": {"core", "models"},
-    "telegram_adapter": {"config", "models"},
+}
+
+SETUP_ALLOWED_DEPENDENCIES = {
+    "__init__": set(),
+    "__main__": {"cli"},
+    "bot_setup": {"errors"},
+    "cli": {"bot_setup", "config", "errors", "service"},
+    "config": set(),
+    "errors": set(),
+    "models": set(),
+    "service": {"config", "errors", "models"},
 }
 
 
@@ -112,26 +115,34 @@ def assert_acyclic(
 
 class ArchitectureTests(unittest.TestCase):
     def test_internal_imports_follow_the_layer_tree(self) -> None:
-        modules = {path.stem: path for path in PACKAGE.glob("*.py")}
-        self.assertEqual(set(modules), set(ALLOWED_DEPENDENCIES))
-        for module, path in modules.items():
-            with self.subTest(module=module):
-                self.assertEqual(
-                    internal_dependencies(path),
-                    ALLOWED_DEPENDENCIES[module],
-                )
+        for package, allowed_dependencies in (
+            (PACKAGE, ALLOWED_DEPENDENCIES),
+            (SETUP_PACKAGE, SETUP_ALLOWED_DEPENDENCIES),
+        ):
+            modules = {path.stem: path for path in package.glob("*.py")}
+            with self.subTest(package=package.name):
+                self.assertEqual(set(modules), set(allowed_dependencies))
+            for module, path in modules.items():
+                with self.subTest(package=package.name, module=module):
+                    self.assertEqual(
+                        internal_dependencies(path),
+                        allowed_dependencies[module],
+                    )
 
     def test_internal_import_graph_has_no_cycles(self) -> None:
-        graph = {
-            path.stem: internal_dependencies(path)
-            for path in PACKAGE.glob("*.py")
-        }
-        assert_acyclic(self, graph, "Import")
+        for package in (PACKAGE, SETUP_PACKAGE):
+            graph = {
+                path.stem: internal_dependencies(path)
+                for path in package.glob("*.py")
+            }
+            with self.subTest(package=package.name):
+                assert_acyclic(self, graph, "Import")
 
     def test_local_function_and_method_calls_have_no_cycles(self) -> None:
-        for path in PACKAGE.glob("*.py"):
-            with self.subTest(module=path.stem):
-                assert_acyclic(self, local_call_graph(path), "Call")
+        for package in (PACKAGE, SETUP_PACKAGE):
+            for path in package.glob("*.py"):
+                with self.subTest(package=package.name, module=path.stem):
+                    assert_acyclic(self, local_call_graph(path), "Call")
 
 
 if __name__ == "__main__":

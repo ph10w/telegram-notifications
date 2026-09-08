@@ -5,9 +5,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from telethon import TelegramClient, events, helpers, utils
-from telethon.errors import FloodWaitError, RPCError
-from telethon.tl.types import Channel, Chat, MessageEntityTextUrl
+from tg_api.telegram_gateway import FloodWaitError, RPCError, TelegramGateway
 
 from .config import ForwarderConfig
 from .core import (
@@ -100,7 +98,7 @@ def _entity_author_details(
     entity: Any,
     entity_id: int | None = None,
 ) -> tuple[str, str, frozenset[str]]:
-    name = " ".join(utils.get_display_name(entity).splitlines()).strip()
+    name = " ".join(TelegramGateway.display_name(entity).splitlines()).strip()
     if not name:
         name = " ".join(
             part
@@ -187,7 +185,7 @@ async def forwarded_author_details(message: Any) -> tuple[str, str, frozenset[st
     from_id = getattr(header, "from_id", None)
     if from_id is not None:
         try:
-            key = f"sender:{utils.get_peer_id(from_id)}"
+            key = f"sender:{TelegramGateway.peer_id(from_id)}"
             return key, "Unbekannter Originalautor", frozenset({key})
         except (TypeError, ValueError):
             pass
@@ -207,7 +205,7 @@ def forwarded_origin(message: Any) -> tuple[int, int] | None:
     if origin_peer is None or not isinstance(origin_message_id, int):
         return None
     try:
-        return utils.get_peer_id(origin_peer), origin_message_id
+        return TelegramGateway.peer_id(origin_peer), origin_message_id
     except (TypeError, ValueError):
         return None
 
@@ -233,14 +231,14 @@ def linked_caption(
     caption = original + suffix
     entities = list(getattr(message, "entities", None) or [])
 
-    if len(helpers.add_surrogate(caption)) > CAPTION_LIMIT:
-        suffix_length = len(helpers.add_surrogate(suffix))
+    if len(TelegramGateway.add_surrogate(caption)) > CAPTION_LIMIT:
+        suffix_length = len(TelegramGateway.add_surrogate(suffix))
         available = max(0, CAPTION_LIMIT - suffix_length - 1)
-        shortened = helpers.add_surrogate(original)[:available]
+        shortened = TelegramGateway.add_surrogate(original)[:available]
         if shortened and 0xD800 <= ord(shortened[-1]) <= 0xDBFF:
             shortened = shortened[:-1]
         original = (
-            helpers.del_surrogate(shortened).rstrip() + "…" if shortened else ""
+            TelegramGateway.del_surrogate(shortened).rstrip() + "…" if shortened else ""
         )
         separator = "\n\n" if original else ""
         caption = original + separator + author_text + link_text
@@ -248,9 +246,9 @@ def linked_caption(
 
     label_prefix = original + separator + author_text + "🕒 "
     entities.append(
-        MessageEntityTextUrl(
-            offset=len(helpers.add_surrogate(label_prefix)),
-            length=len(helpers.add_surrogate(label)),
+        TelegramGateway.make_text_link_entity(
+            offset=len(TelegramGateway.add_surrogate(label_prefix)),
+            length=len(TelegramGateway.add_surrogate(label)),
             url=link,
         )
     )
@@ -266,83 +264,50 @@ class ResolvedSource:
 
 
 def source_kind(entity: Any) -> SourceKind:
-    if isinstance(entity, Channel):
-        if entity.megagroup:
-            return SourceKind.SUPERGROUP
-        return SourceKind.CHANNEL
-    if isinstance(entity, Chat):
-        return SourceKind.GROUP
-    raise ValueError("Als Telegram-Quelle sind nur Gruppen und Kanäle erlaubt.")
+    return SourceKind(TelegramGateway.source_kind(entity))
 
 
 class VoiceForwarder:
     def __init__(
         self,
-        client: TelegramClient,
+        client: TelegramGateway,
         config: ForwarderConfig,
         state: MonitoringStateRepository,
-        target_client: Any | None = None,
+        *,
+        relay_via_bot: bool = False,
     ) -> None:
         self.client = client
         self.config = config
         self.state = state
-        self.target_client = target_client or client
+        self.relay_via_bot = relay_via_bot
         self.sources: dict[int, ResolvedSource] = {}
         self.target: Any = None
         self.target_id: int | None = None
         self._processing_lock = asyncio.Lock()
 
     async def resolve_chats(self) -> None:
-        LOGGER.info("Löse Telegram-Zielchat %s auf", self.config.target_chat)
-        self.target = await self._resolve_target_entity(self.config.target_chat)
-        explicit_target_id = getattr(self.target, "id", None)
-        self.target_id = (
-            explicit_target_id
-            if isinstance(explicit_target_id, int) and explicit_target_id < 0
-            else utils.get_peer_id(self.target)
+        LOGGER.info("Löse Telegram-Ziel und Quellen auf")
+        resolved = await self.client.resolve_target_and_sources(
+            self.config.target_chat, self.config.source_chats
         )
-
-        for reference in self.config.source_chats:
-            LOGGER.info("Löse Telegram-Quellchat %s auf", reference)
-            entity = await self._resolve_entity(reference)
-            source_id = utils.get_peer_id(entity)
-            if source_id == self.target_id:
-                raise ValueError("Quell- und Zielchat dürfen nicht identisch sein.")
-            self.sources[source_id] = ResolvedSource(
-                id=source_id,
-                entity=entity,
-                name=utils.get_display_name(entity),
-                kind=source_kind(entity),
+        self.target = resolved.target
+        self.target_id = resolved.target.id
+        self.sources = {
+            source.id: ResolvedSource(
+                id=source.id,
+                entity=source.entity,
+                name=source.title,
+                kind=SourceKind(source.kind),
             )
+            for source in resolved.sources
+        }
 
         LOGGER.info(
             "Überwache %s Quelle(n); Ziel: %s (ID %s)",
             len(self.sources),
-            getattr(self.target, "title", None) or utils.get_display_name(self.target),
+            getattr(self.target, "title", None) or TelegramGateway.display_name(self.target),
             self.target_id,
         )
-
-    async def _resolve_entity(self, reference: int | str) -> Any:
-        try:
-            return await self.client.get_entity(reference)
-        except ValueError:
-            LOGGER.info(
-                "Telegram-Entity %s fehlt im lokalen Cache; lade Dialogliste",
-                reference,
-            )
-            await self.client.get_dialogs()
-            return await self.client.get_entity(reference)
-
-    async def _resolve_target_entity(self, reference: int | str) -> Any:
-        try:
-            return await self.target_client.get_entity(reference)
-        except ValueError:
-            LOGGER.info(
-                "Telegram-Ziel %s fehlt im Bot-Cache; lade Bot-Dialogliste",
-                reference,
-            )
-            await self.target_client.get_dialogs()
-            return await self.target_client.get_entity(reference)
 
     async def process_message(
         self,
@@ -522,7 +487,7 @@ class VoiceForwarder:
                         duration_seconds=duration,
                     )
                     try:
-                        header = await self.target_client.send_message(
+                        header = await self.client.send_message(
                             self.target,
                             collection_header(author_label, 1),
                             parse_mode=None,
@@ -593,7 +558,7 @@ class VoiceForwarder:
             )
         if block_count is not None and block_count > 1:
             try:
-                await self.target_client.edit_message(
+                await self.client.edit_message(
                     self.target,
                     block.header_message_id,
                     collection_header(block.author_label, block_count),
@@ -759,20 +724,17 @@ class VoiceForwarder:
 
         for attempt in range(1, retries + 1):
             try:
-                if self.target_client is self.client:
-                    sent = await self._send_with_user_account(
-                        message,
-                        link=link,
-                        caption=caption,
-                        entities=entities,
-                    )
-                else:
-                    sent = await self.target_client.copy_message(
+                if self.relay_via_bot:
+                    sent = await self.client.copy_message(
                         source_id,
                         message.id,
                         message,
                         caption=caption,
                         entities=entities,
+                    )
+                else:
+                    sent = await self._send_with_user_account(
+                        message, link=link, caption=caption, entities=entities
                     )
                 if isinstance(sent, (list, tuple)):
                     sent = sent[0] if sent else None
@@ -829,7 +791,7 @@ class VoiceForwarder:
         if caption is None:
             return
         try:
-            await self.target_client.edit_caption(
+            await self.client.edit_caption(
                 self.target,
                 job.target_message_id,
                 caption,
@@ -930,29 +892,23 @@ class VoiceForwarder:
     async def run(self) -> None:
         await self.resolve_chats()
 
-        async def on_new_message(event: events.NewMessage.Event) -> None:
+        async def on_new_message(event: Any) -> None:
             source_id = event.chat_id
             if source_id not in self.sources:
                 return
             async with self._processing_lock:
                 await self.process_message(source_id, event.message)
 
-        async def on_message_edited(event: events.MessageEdited.Event) -> None:
+        async def on_message_edited(event: Any) -> None:
             source_id = event.chat_id
             if source_id not in self.sources:
                 return
             async with self._processing_lock:
                 await self.process_message_edit(source_id, event.message)
 
-        self.client.add_event_handler(
-            on_new_message,
-            events.NewMessage(chats=[source.entity for source in self.sources.values()]),
-        )
-        self.client.add_event_handler(
-            on_message_edited,
-            events.MessageEdited(
-                chats=[source.entity for source in self.sources.values()]
-            ),
+        chats = [source.entity for source in self.sources.values()]
+        self.client.register_monitoring_handlers(
+            on_new_message, on_message_edited, chats
         )
 
         # Live updates queue behind this lock while recovery establishes a clean cursor.
@@ -961,4 +917,4 @@ class VoiceForwarder:
             await self.catch_up()
 
         LOGGER.info("Monitoring läuft. Beenden mit Ctrl+C.")
-        await self.client.run_until_disconnected()
+        await self.client.wait_until_disconnected()

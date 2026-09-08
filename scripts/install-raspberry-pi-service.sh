@@ -108,7 +108,7 @@ run_as_service_user "$PYTHON_EXE" -m pip install --disable-pip-version-check -e 
 mapfile -t runtime_paths < <(
     run_as_service_user "$PYTHON_EXE" -c '
 from pathlib import Path
-from telegram_voice_forwarder.config import ForwarderConfig
+from tg_forwarder.config import ForwarderConfig
 
 config = ForwarderConfig.from_env()
 session = config.session_path
@@ -127,7 +127,7 @@ if [[ ! -f "$SESSION_FILE" ]]; then
     [[ -t 0 ]] || fail "Telegram session $SESSION_FILE is missing and interactive login is unavailable."
     printf '\nNo authorized Telegram session was found.\n'
     printf 'Starting interactive Telegram login and chat listing...\n\n'
-    run_as_service_user "$PYTHON_EXE" -m telegram_voice_forwarder list-chats
+    run_as_service_user "$PYTHON_EXE" -m tg_setup list-chats
 fi
 [[ -f "$SESSION_FILE" ]] || fail "Telegram login did not create $SESSION_FILE."
 run_as_service_user test -r "$SESSION_FILE" || fail "$SERVICE_USER cannot read $SESSION_FILE."
@@ -148,7 +148,7 @@ User=$SERVICE_USER
 Group=$SERVICE_GROUP
 WorkingDirectory=$PROJECT_DIR
 Environment=PYTHONUNBUFFERED=1
-ExecStart=$(systemd_quote "$PYTHON_EXE") -m telegram_voice_forwarder run
+ExecStart=$(systemd_quote "$PYTHON_EXE") -m tg_forwarder run
 Restart=always
 RestartSec=5s
 TimeoutStopSec=15s

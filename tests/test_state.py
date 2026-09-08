@@ -4,8 +4,8 @@ import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from telegram_voice_forwarder.core import ResetPlan, ResetPolicy
-from telegram_voice_forwarder.state import StateStore
+from tg_forwarder.core import ResetPlan, ResetPolicy
+from tg_forwarder.state import StateStore
 
 
 class StateStoreTests(unittest.TestCase):

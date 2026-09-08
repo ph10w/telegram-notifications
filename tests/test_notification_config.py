@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from telegram_notifications.config import NotificationConfig
+from tg_notification.config import NotificationConfig
 
 
 class NotificationConfigTests(unittest.TestCase):
@@ -17,8 +17,8 @@ class NotificationConfigTests(unittest.TestCase):
         }
         with patch.dict(os.environ, environment, clear=True):
             with patch(
-                "telegram_notifications.config.find_dotenv", return_value=""
-            ), patch("telegram_notifications.config.load_dotenv"):
+                "tg_notification.config.find_dotenv", return_value=""
+            ), patch("tg_notification.config.load_dotenv"):
                 config = NotificationConfig.from_env()
 
         self.assertEqual(
@@ -39,8 +39,8 @@ class NotificationConfigTests(unittest.TestCase):
         }
         with patch.dict(os.environ, environment, clear=True):
             with patch(
-                "telegram_notifications.config.find_dotenv", return_value=""
-            ), patch("telegram_notifications.config.load_dotenv"):
+                "tg_notification.config.find_dotenv", return_value=""
+            ), patch("tg_notification.config.load_dotenv"):
                 config = NotificationConfig.from_env()
 
         self.assertEqual(config.codex_app_server_command, ("codex", "app-server"))

@@ -5,9 +5,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from telegram_voice_forwarder.config import ForwarderConfig
-from telegram_voice_forwarder.reset_service import ResetResult, reset_scan_state
-from telegram_voice_forwarder.state import StateStore
+from tg_forwarder.config import ForwarderConfig
+from tg_forwarder.reset_service import ResetResult, reset_scan_state
+from tg_forwarder.state import StateStore
 
 
 class PeriodResetTests(unittest.IsolatedAsyncioTestCase):
@@ -62,8 +62,7 @@ class PeriodResetTests(unittest.IsolatedAsyncioTestCase):
             store.close()
 
             gateway = SimpleNamespace(
-                start=AsyncMock(),
-                resolve_target=AsyncMock(return_value=-1003),
+                login_resolve_chat=AsyncMock(return_value=-1003),
                 boundary_before=AsyncMock(
                     side_effect=((-1001, 10), (-1002, 20))
                 ),
@@ -82,9 +81,8 @@ class PeriodResetTests(unittest.IsolatedAsyncioTestCase):
                 result,
                 ResetResult(config.state_db, cutoff, 2, 3, 4, 0),
             )
-            gateway.start.assert_awaited_once_with()
+            gateway.login_resolve_chat.assert_awaited_once_with(-1003)
             gateway.close.assert_awaited_once_with()
-            gateway.resolve_target.assert_awaited_once_with(-1003)
             gateway.delete_target_messages.assert_awaited_once_with(
                 (108, 115, 125, 1080)
             )
@@ -140,8 +138,7 @@ class PeriodResetTests(unittest.IsolatedAsyncioTestCase):
             store.close()
 
             gateway = SimpleNamespace(
-                start=AsyncMock(),
-                resolve_target=AsyncMock(return_value=-1003),
+                login_resolve_chat=AsyncMock(return_value=-1003),
                 resolve_source=AsyncMock(return_value=-1001),
                 boundary_before=AsyncMock(),
                 delete_target_messages=AsyncMock(),
@@ -210,8 +207,7 @@ class PeriodResetTests(unittest.IsolatedAsyncioTestCase):
             store.close()
 
             gateway = SimpleNamespace(
-                start=AsyncMock(),
-                resolve_target=AsyncMock(return_value=-1003),
+                login_resolve_chat=AsyncMock(return_value=-1003),
                 resolve_source=AsyncMock(),
                 boundary_before=AsyncMock(return_value=(-1001, 10)),
                 delete_target_messages=AsyncMock(),
@@ -271,8 +267,7 @@ class PeriodResetTests(unittest.IsolatedAsyncioTestCase):
             store.close()
 
             gateway = SimpleNamespace(
-                start=AsyncMock(),
-                resolve_target=AsyncMock(return_value=-1003),
+                login_resolve_chat=AsyncMock(return_value=-1003),
                 boundary_before=AsyncMock(),
                 delete_target_messages=AsyncMock(
                     side_effect=RuntimeError("denied")
