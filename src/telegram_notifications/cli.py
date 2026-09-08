@@ -82,7 +82,6 @@ def main() -> None:
                 sink,
                 state_path=config.state_path,
                 rate_limit_id=config.codex_rate_limit_id,
-                window_minutes=config.codex_window_minutes,
                 poll_seconds=config.codex_poll_seconds,
             )
             asyncio.run(monitor.run())

@@ -30,19 +30,6 @@ def _required(name: str) -> str:
     return value
 
 
-def _integer(name: str, default: int, *, minimum: int = 0) -> int:
-    raw = os.getenv(name)
-    if raw is None or not raw.strip():
-        return default
-    try:
-        value = int(raw)
-    except ValueError as exc:
-        raise NotificationConfigError(f"{name} muss eine ganze Zahl sein.") from exc
-    if value < minimum:
-        raise NotificationConfigError(f"{name} muss mindestens {minimum} sein.")
-    return value
-
-
 def _number(name: str, default: float, *, minimum: float = 0.0) -> float:
     raw = os.getenv(name)
     if raw is None or not raw.strip():
@@ -113,7 +100,6 @@ class NotificationConfig:
     target_chat: ChatRef
     codex_app_server_command: tuple[str, ...]
     codex_rate_limit_id: str
-    codex_window_minutes: int
     codex_poll_seconds: float
     state_path: Path
     log_path: Path
@@ -130,9 +116,6 @@ class NotificationConfig:
             codex_app_server_command=_app_server_command(),
             codex_rate_limit_id=(
                 os.getenv("CODEX_RATE_LIMIT_ID", "codex").strip() or "codex"
-            ),
-            codex_window_minutes=_integer(
-                "CODEX_RATE_LIMIT_WINDOW_MINUTES", 300, minimum=1
             ),
             codex_poll_seconds=_number(
                 "CODEX_RATE_LIMIT_POLL_SECONDS", 1800.0, minimum=1.0

@@ -101,15 +101,23 @@ python -m telegram_notifications run
 
 For every polling interval, it starts a fresh local `codex app-server`, reads
 the authenticated Codex rate limits, and immediately stops that process again.
-It observes the `codex` primary bucket with a 300-minute window. A Telegram
-message is sent five minutes before the predicted 5-hour reset and again at
-the predicted reset time. A one-time confirmation poll runs 15 seconds after
-that reset, then the regular interval resumes. The
-monitor stores its last observation in
-`CODEX_NOTIFICATION_STATE` so restarting it does not create a false initial
-notification. `CODEX_RATE_LIMIT_POLL_SECONDS` defaults to 1,800 seconds
-(30 minutes). If the 5-hour window is still completely unused, no reset timer
-or confirmation poll is scheduled.
+It observes the `codex` primary 5-hour bucket and the secondary weekly bucket.
+For each used window, a Telegram message is sent five minutes before its
+predicted reset and again at the predicted reset time. A one-time confirmation
+poll runs 15 seconds after a predicted reset, then the regular interval
+resumes. The monitor stores both observations in `CODEX_NOTIFICATION_STATE`, so
+a restart does not create a false initial notification. `CODEX_RATE_LIMIT_POLL_SECONDS`
+defaults to 1,800 seconds (30 minutes). If a window is completely unused, no
+reset timer or confirmation poll is scheduled for it.
+
+If the monitor has already created the earlier separate weekly state file,
+migrate it once before restarting the monitor:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\migrate_codex_notification_state.py
+```
+
+The migration retains a backup of the previous 5-hour state file.
 
 The monitor appends runtime messages to
 `data/logs/telegram-notifications.log`. Override this location with

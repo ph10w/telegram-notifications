@@ -1,6 +1,8 @@
 import asyncio
 import json
 import math
+import subprocess
+import sys
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 
@@ -25,6 +27,12 @@ class RateLimitWindow:
 
 class RateLimitReader(Protocol):
     async def read_rate_limits(self) -> dict[str, Any]: ...
+
+
+def _app_server_subprocess_options() -> dict[str, int]:
+    if sys.platform == "win32":
+        return {"creationflags": subprocess.CREATE_NO_WINDOW}
+    return {}
 
 
 def _number(value: object) -> float | None:
@@ -55,26 +63,26 @@ def extract_rate_limit_snapshot(
     if not isinstance(bucket, dict):
         return None
 
-    primary = bucket.get("primary")
-    if not isinstance(primary, dict):
-        return None
-    used_percent = _number(primary.get("usedPercent"))
-    if used_percent is None or not 0 <= used_percent <= 100:
-        return None
-
-    duration_value = _number(primary.get("windowDurationMins"))
-    duration = int(duration_value) if duration_value is not None else None
-    if duration is not None and duration != window_minutes:
-        return None
-
-    reset_value = _number(primary.get("resetsAt"))
-    resets_at = int(reset_value) if reset_value is not None else None
-    return RateLimitSnapshot(
-        limit_id=limit_id,
-        used_percent=used_percent,
-        window_duration_minutes=duration,
-        resets_at=resets_at,
-    )
+    for name in ("primary", "secondary"):
+        window = bucket.get(name)
+        if not isinstance(window, dict):
+            continue
+        used_percent = _number(window.get("usedPercent"))
+        if used_percent is None or not 0 <= used_percent <= 100:
+            continue
+        duration_value = _number(window.get("windowDurationMins"))
+        duration = int(duration_value) if duration_value is not None else None
+        if duration != window_minutes:
+            continue
+        reset_value = _number(window.get("resetsAt"))
+        resets_at = int(reset_value) if reset_value is not None else None
+        return RateLimitSnapshot(
+            limit_id=limit_id,
+            used_percent=used_percent,
+            window_duration_minutes=duration,
+            resets_at=resets_at,
+        )
+    return None
 
 
 def extract_rate_limit_windows(
@@ -130,6 +138,7 @@ class CodexAppServerClient:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
+                **_app_server_subprocess_options(),
             )
         except OSError as exc:
             raise CodexAppServerError(

@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -32,6 +33,29 @@ def _rate_limits(*, used_percent: float, resets_at: int) -> dict[str, object]:
                 "windowDurationMins": 300,
                 "resetsAt": resets_at,
             }
+        }
+    }
+
+
+def _primary_and_weekly_rate_limits(
+    *,
+    primary_used_percent: float,
+    primary_resets_at: int,
+    weekly_used_percent: float,
+    weekly_resets_at: int,
+) -> dict[str, object]:
+    return {
+        "rateLimits": {
+            "primary": {
+                "usedPercent": primary_used_percent,
+                "windowDurationMins": 300,
+                "resetsAt": primary_resets_at,
+            },
+            "secondary": {
+                "usedPercent": weekly_used_percent,
+                "windowDurationMins": 10_080,
+                "resetsAt": weekly_resets_at,
+            },
         }
     }
 
@@ -109,6 +133,57 @@ class CodexRateLimitMonitorTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(sink.messages), 2)
             self.assertIn("in 5 Minuten", sink.messages[0])
             self.assertIn("wird jetzt", sink.messages[1])
+
+    async def test_sends_weekly_pre_reset_and_predicted_reset_notifications_once(self) -> None:
+        primary_reset_at = 2_000_018_000
+        weekly_reset_at = 2_000_000_000
+        with tempfile.TemporaryDirectory() as directory:
+            sink = RecordingSink()
+            monitor = CodexRateLimitMonitor(
+                reader=RecordingReader([]),
+                sink=sink,
+                state_path=Path(directory) / "state.json",
+            )
+            await monitor.observe(
+                _primary_and_weekly_rate_limits(
+                    primary_used_percent=0,
+                    primary_resets_at=primary_reset_at,
+                    weekly_used_percent=25,
+                    weekly_resets_at=weekly_reset_at,
+                )
+            )
+
+            with patch("telegram_notifications.codex_monitor.time.time", return_value=weekly_reset_at - 300):
+                self.assertTrue(await monitor._send_due_scheduled_notifications())
+            with patch("telegram_notifications.codex_monitor.time.time", return_value=weekly_reset_at):
+                self.assertTrue(await monitor._send_due_scheduled_notifications())
+
+            self.assertEqual(len(sink.messages), 2)
+            self.assertIn("Wochen-Nutzungsfenster", sink.messages[0])
+            self.assertIn("in 5 Minuten", sink.messages[0])
+            self.assertIn("Wochen-Nutzungsfenster", sink.messages[1])
+            self.assertIn("wird jetzt", sink.messages[1])
+
+    async def test_stores_both_windows_in_one_state_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state_path = Path(directory) / "state.json"
+            monitor = CodexRateLimitMonitor(
+                reader=RecordingReader([]),
+                sink=RecordingSink(),
+                state_path=state_path,
+            )
+
+            await monitor.observe(
+                _primary_and_weekly_rate_limits(
+                    primary_used_percent=25,
+                    primary_resets_at=2_000_018_000,
+                    weekly_used_percent=50,
+                    weekly_resets_at=2_000_000_000,
+                )
+            )
+
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(set(payload["windows"]), {"five_hour", "weekly"})
 
     async def test_predicted_reset_prevents_duplicate_after_following_poll(self) -> None:
         reset_at = 2_000_000_000
@@ -188,12 +263,14 @@ class CodexRateLimitMonitorTests(unittest.IsolatedAsyncioTestCase):
         reset_at = 2_000_000_000
         with tempfile.TemporaryDirectory() as directory:
             sink = RecordingSink()
+            unused_window = _rate_limits(used_percent=0, resets_at=reset_at)
             monitor = CodexRateLimitMonitor(
-                reader=RecordingReader([]),
+                reader=RecordingReader([unused_window, unused_window]),
                 sink=sink,
                 state_path=Path(directory) / "state.json",
             )
-            await monitor.observe(_rate_limits(used_percent=0, resets_at=reset_at))
+            await monitor.check_once(report_limits=True)
+            await monitor.check_once()
 
             with patch(
                 "telegram_notifications.codex_monitor.time.time",

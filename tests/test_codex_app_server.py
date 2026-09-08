@@ -1,7 +1,10 @@
 import unittest
+from unittest.mock import patch
 
 from telegram_notifications.codex_app_server import (
     CodexAppServerRateLimitReader,
+    _app_server_subprocess_options,
+    extract_rate_limit_snapshot,
     extract_rate_limit_windows,
 )
 
@@ -57,6 +60,39 @@ class ExtractRateLimitWindowsTests(unittest.TestCase):
 
         self.assertEqual([window.name for window in windows], ["primary", "secondary"])
         self.assertEqual([window.window_duration_minutes for window in windows], [300, 10_080])
+
+    def test_extracts_the_weekly_secondary_window(self) -> None:
+        payload = {
+            "rateLimits": {
+                "primary": {
+                    "usedPercent": 25,
+                    "windowDurationMins": 300,
+                    "resetsAt": 1_800_000_000,
+                },
+                "secondary": {
+                    "usedPercent": 50,
+                    "windowDurationMins": 10_080,
+                    "resetsAt": 1_800_604_800,
+                },
+            }
+        }
+
+        weekly = extract_rate_limit_snapshot(payload, window_minutes=10_080)
+
+        self.assertIsNotNone(weekly)
+        assert weekly is not None
+        self.assertEqual(weekly.used_percent, 50)
+        self.assertEqual(weekly.resets_at, 1_800_604_800)
+
+
+class AppServerSubprocessOptionsTests(unittest.TestCase):
+    def test_hides_the_app_server_console_on_windows(self) -> None:
+        with patch("telegram_notifications.codex_app_server.sys.platform", "win32"):
+            self.assertIn("creationflags", _app_server_subprocess_options())
+
+    def test_omits_windows_options_on_other_platforms(self) -> None:
+        with patch("telegram_notifications.codex_app_server.sys.platform", "linux"):
+            self.assertEqual(_app_server_subprocess_options(), {})
 
 
 if __name__ == "__main__":
