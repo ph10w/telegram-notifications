@@ -5,6 +5,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tg_notification.codex_monitor import CodexRateLimitMonitor
+from tg_notification.codex_app_server import AccountRateLimitResult
+from tg_notification.codex_monitor import MultiAccountCodexRateLimitMonitor
 
 
 class RecordingSink:
@@ -23,6 +25,14 @@ class RecordingReader:
     async def read_rate_limits(self) -> dict[str, object]:
         self.read_count += 1
         return next(self._payloads)
+
+
+class RecordingAccountReader:
+    def __init__(self, reads: list[tuple[AccountRateLimitResult, ...]]) -> None:
+        self._reads = iter(reads)
+
+    async def read_all_rate_limits(self) -> tuple[AccountRateLimitResult, ...]:
+        return next(self._reads)
 
 
 def _rate_limits(*, used_percent: float, resets_at: int) -> dict[str, object]:
@@ -184,6 +194,52 @@ class CodexRateLimitMonitorTests(unittest.IsolatedAsyncioTestCase):
 
             payload = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(set(payload["windows"]), {"five_hour", "weekly"})
+
+    async def test_keeps_rate_limit_state_and_notifications_per_account(self) -> None:
+        first_reset = 2_000_000_000
+        second_reset = first_reset + 18_000
+        with tempfile.TemporaryDirectory() as directory:
+            sink = RecordingSink()
+            monitor = MultiAccountCodexRateLimitMonitor(
+                RecordingAccountReader(
+                    [
+                        (
+                            AccountRateLimitResult(
+                                "account-alpha-12345",
+                                _rate_limits(used_percent=100, resets_at=first_reset),
+                            ),
+                            AccountRateLimitResult(
+                                "account-beta-67890",
+                                _rate_limits(used_percent=100, resets_at=first_reset),
+                            ),
+                        ),
+                        (
+                            AccountRateLimitResult(
+                                "account-alpha-12345",
+                                _rate_limits(used_percent=0, resets_at=second_reset),
+                            ),
+                            AccountRateLimitResult(
+                                "account-beta-67890",
+                                _rate_limits(used_percent=0, resets_at=second_reset),
+                            ),
+                        ),
+                    ]
+                ),
+                sink,
+                state_path=Path(directory) / "state.json",
+            )
+
+            self.assertFalse(await monitor.check_once())
+            self.assertTrue(await monitor.check_once())
+
+            self.assertEqual(len(sink.messages), 2)
+            self.assertIn("Konto account-…", sink.messages[0])
+            self.assertIn("Konto account-…", sink.messages[1])
+            payload = json.loads((Path(directory) / "state.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                set(payload["accounts"]),
+                {"account-alpha-12345", "account-beta-67890"},
+            )
 
     async def test_predicted_reset_prevents_duplicate_after_following_poll(self) -> None:
         reset_at = 2_000_000_000

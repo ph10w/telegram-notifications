@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .codex_app_server import (
+    AccountRateLimitReader,
     RateLimitSnapshot,
     RateLimitReader,
     RateLimitWindow,
@@ -20,12 +21,16 @@ LOGGER = logging.getLogger(__name__)
 PRE_RESET_SECONDS = 300
 RESET_CONFIRMATION_DELAY_SECONDS = 15
 WEEKLY_WINDOW_MINUTES = 10_080
+ACCOUNT_ID_DISPLAY_LENGTH = 8
 
 
 class RateLimitStateStore:
-    def __init__(self, path: Path, *, window_key: str) -> None:
+    def __init__(
+        self, path: Path, *, window_key: str, account_id: str | None = None
+    ) -> None:
         self._path = path
         self._window_key = window_key
+        self._account_id = account_id
 
     def load(self) -> tuple[RateLimitSnapshot | None, int | None, int | None, int | None]:
         try:
@@ -34,6 +39,13 @@ class RateLimitStateStore:
             return None, None, None, None
         if not isinstance(payload, dict):
             return None, None, None, None
+        if self._account_id is not None:
+            accounts = payload.get("accounts")
+            if not isinstance(accounts, dict):
+                return None, None, None, None
+            payload = accounts.get(self._account_id)
+            if not isinstance(payload, dict):
+                return None, None, None, None
         windows = payload.get("windows")
         if not isinstance(windows, dict):
             return None, None, None, None
@@ -86,11 +98,26 @@ class RateLimitStateStore:
             payload = {}
         if not isinstance(payload, dict):
             payload = {}
-        windows = payload.get("windows")
-        if not isinstance(windows, dict):
-            windows = {}
-        windows[self._window_key] = window_payload
-        payload = {"windows": windows}
+        if self._account_id is None:
+            windows = payload.get("windows")
+            if not isinstance(windows, dict):
+                windows = {}
+            windows[self._window_key] = window_payload
+            payload["windows"] = windows
+        else:
+            accounts = payload.get("accounts")
+            if not isinstance(accounts, dict):
+                accounts = {}
+            account_payload = accounts.get(self._account_id)
+            if not isinstance(account_payload, dict):
+                account_payload = {}
+            windows = account_payload.get("windows")
+            if not isinstance(windows, dict):
+                windows = {}
+            windows[self._window_key] = window_payload
+            account_payload["windows"] = windows
+            accounts[self._account_id] = account_payload
+            payload["accounts"] = accounts
         temporary = self._path.with_name(f".{self._path.name}.tmp")
         temporary.write_text(
             json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -193,6 +220,12 @@ def _window_status(window: RateLimitWindow) -> str:
     return f"{status}, Reset: {reset_at:%Y-%m-%d %H:%M:%S %Z}"
 
 
+def _display_account_id(account_id: str) -> str:
+    if len(account_id) <= ACCOUNT_ID_DISPLAY_LENGTH:
+        return account_id
+    return f"{account_id[:ACCOUNT_ID_DISPLAY_LENGTH]}…"
+
+
 class CodexRateLimitMonitor:
     def __init__(
         self,
@@ -204,12 +237,16 @@ class CodexRateLimitMonitor:
         window_minutes: int = 300,
         poll_seconds: float = 60.0,
         additional_window_minutes: tuple[int, ...] = (WEEKLY_WINDOW_MINUTES,),
+        account_id: str | None = None,
     ) -> None:
         self._reader = reader
         self._sink = sink
         self._state = RateLimitStateStore(
-            state_path, window_key=_window_state_key(window_minutes)
+            state_path,
+            window_key=_window_state_key(window_minutes),
+            account_id=account_id,
         )
+        self._account_id = account_id
         self._rate_limit_id = rate_limit_id
         self._window_minutes = window_minutes
         self._poll_seconds = poll_seconds
@@ -222,6 +259,7 @@ class CodexRateLimitMonitor:
                 window_minutes=additional_window,
                 poll_seconds=poll_seconds,
                 additional_window_minutes=(),
+                account_id=account_id,
             )
             for additional_window in additional_window_minutes
             if additional_window != window_minutes
@@ -305,7 +343,7 @@ class CodexRateLimitMonitor:
             and previous.resets_at != last_reset_notified
         ):
             await self._sink.send_text(
-                "Codex-Nutzung\n\n" + _reset_message(snapshot)
+                self._notification_prefix() + _reset_message(snapshot)
             )
             last_reset_notified = previous.resets_at
             notified_now = True
@@ -396,7 +434,9 @@ class CodexRateLimitMonitor:
             last_pre_reset_notified != snapshot.resets_at
             and snapshot.resets_at - PRE_RESET_SECONDS <= now < snapshot.resets_at
         ):
-            await self._sink.send_text("Codex-Nutzung\n\n" + _pre_reset_message(snapshot))
+            await self._sink.send_text(
+                self._notification_prefix() + _pre_reset_message(snapshot)
+            )
             self._state.save(
                 snapshot,
                 last_reset_notified_at=last_reset_notified,
@@ -406,7 +446,7 @@ class CodexRateLimitMonitor:
             return True
         if last_reset_notified != snapshot.resets_at and now >= snapshot.resets_at:
             await self._sink.send_text(
-                "Codex-Nutzung\n\n" + _scheduled_reset_message(snapshot)
+                self._notification_prefix() + _scheduled_reset_message(snapshot)
             )
             self._state.save(
                 snapshot,
@@ -455,3 +495,104 @@ class CodexRateLimitMonitor:
             last_pre_reset_notified_at=last_pre_reset_notified,
             last_reset_confirmation_polled_at=snapshot.resets_at,
         )
+
+    def _notification_prefix(self) -> str:
+        if self._account_id is None:
+            return "Codex-Nutzung\n\n"
+        return f"Codex-Nutzung – Konto {_display_account_id(self._account_id)}\n\n"
+
+
+class MultiAccountCodexRateLimitMonitor:
+    """Poll every saved Codex account while keeping each account state isolated."""
+
+    def __init__(
+        self,
+        reader: AccountRateLimitReader,
+        sink: NotificationSink,
+        *,
+        state_path: Path,
+        rate_limit_id: str = "codex",
+        poll_seconds: float = 60.0,
+    ) -> None:
+        self._reader = reader
+        self._sink = sink
+        self._state_path = state_path
+        self._rate_limit_id = rate_limit_id
+        self._poll_seconds = poll_seconds
+        self._monitors: dict[str, CodexRateLimitMonitor] = {}
+
+    async def run(self) -> None:
+        LOGGER.info(
+            "Mehrkonto-Codex-Nutzungsmonitor gestartet; Abfrage alle %g Sekunden.",
+            self._poll_seconds,
+        )
+        await self.check_once(report_limits=True)
+        next_poll_at = asyncio.get_running_loop().time() + self._poll_seconds
+        while True:
+            delay_until_poll = max(0.0, next_poll_at - asyncio.get_running_loop().time())
+            notification_delays = [
+                monitor._seconds_until_any_scheduled_notification()
+                for monitor in self._monitors.values()
+            ]
+            confirmation_delays = [
+                monitor._seconds_until_any_confirmation_poll()
+                for monitor in self._monitors.values()
+            ]
+            available_delays = [delay_until_poll]
+            available_delays.extend(
+                delay for delay in notification_delays if delay is not None
+            )
+            available_delays.extend(
+                delay for delay in confirmation_delays if delay is not None
+            )
+            await asyncio.sleep(min(available_delays))
+            for monitor in self._monitors.values():
+                await monitor._send_due_scheduled_notifications()
+            if any(
+                monitor._reset_confirmation_poll_due()
+                for monitor in self._monitors.values()
+            ):
+                for monitor in self._monitors.values():
+                    monitor._mark_reset_confirmation_polled()
+                await self.check_once()
+                next_poll_at = asyncio.get_running_loop().time() + self._poll_seconds
+            elif asyncio.get_running_loop().time() >= next_poll_at:
+                await self.check_once()
+                next_poll_at = asyncio.get_running_loop().time() + self._poll_seconds
+
+    async def check_once(self, *, report_limits: bool = False) -> bool:
+        notified_now = False
+        for result in await self._reader.read_all_rate_limits():
+            if report_limits:
+                windows = extract_rate_limit_windows(
+                    result.payload, limit_id=self._rate_limit_id
+                )
+                if windows:
+                    LOGGER.info(
+                        "Codex-Nutzungsstand beim Start für Konto %s:\n%s",
+                        result.account_id,
+                        "\n".join(_window_status(window) for window in windows),
+                    )
+                else:
+                    LOGGER.warning(
+                        "Der App-Server lieferte für Konto %s keine lesbaren "
+                        "Codex-Nutzungsfenster.",
+                        result.account_id,
+                    )
+            monitor = self._monitor_for(result.account_id)
+            notified_now = await monitor.observe(result.payload) or notified_now
+        return notified_now
+
+    def _monitor_for(self, account_id: str) -> CodexRateLimitMonitor:
+        monitor = self._monitors.get(account_id)
+        if monitor is None:
+            monitor = CodexRateLimitMonitor(
+                self._reader,  # Used only by the wrapper's direct observe calls.
+                self._sink,
+                state_path=self._state_path,
+                rate_limit_id=self._rate_limit_id,
+                poll_seconds=self._poll_seconds,
+                account_id=account_id,
+            )
+            self._monitors[account_id] = monitor
+        return monitor

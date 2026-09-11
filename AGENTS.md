@@ -20,6 +20,9 @@ transport, forwarding, reset, or notification-monitor behavior.
   new environment variable in `.env.example` and `README.md`.
 - Keep processing state in `StateStore`. A remote deletion failure must not
   discard local state.
+- Treat `data/codex-accounts/*` as private Codex homes. Never log, expose, or
+  commit their `auth.json` files; update a profile from the active auth cache
+  only when its `account_id` matches and its `last_refresh` is newer.
 - Do not commit `.env`, Telegram session files, SQLite databases, credentials,
   phone numbers, or message contents.
 

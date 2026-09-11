@@ -1,12 +1,17 @@
 import asyncio
 import json
+import logging
 import math
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Mapping, Protocol
 
 from .errors import CodexAppServerError
+from .codex_accounts import CodexAccountProfileStore
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +32,16 @@ class RateLimitWindow:
 
 class RateLimitReader(Protocol):
     async def read_rate_limits(self) -> dict[str, Any]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class AccountRateLimitResult:
+    account_id: str
+    payload: dict[str, Any]
+
+
+class AccountRateLimitReader(Protocol):
+    async def read_all_rate_limits(self) -> tuple[AccountRateLimitResult, ...]: ...
 
 
 def _app_server_subprocess_options() -> dict[str, int]:
@@ -126,8 +141,13 @@ def extract_rate_limit_windows(
 class CodexAppServerClient:
     """Minimal JSONL client for the local ``codex app-server`` process."""
 
-    def __init__(self, command: tuple[str, ...]) -> None:
+    def __init__(
+        self, command: tuple[str, ...], *, environment: Mapping[str, str] | None = None
+    ) -> None:
         self._command = command
+        self._environment = None
+        if environment is not None:
+            self._environment = {**os.environ, **environment}
         self._process: asyncio.subprocess.Process | None = None
         self._next_request_id = 1
 
@@ -138,6 +158,7 @@ class CodexAppServerClient:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
+                env=self._environment,
                 **_app_server_subprocess_options(),
             )
         except OSError as exc:
@@ -239,17 +260,72 @@ class CodexAppServerRateLimitReader:
         self,
         command: tuple[str, ...],
         *,
-        client_factory: Callable[[tuple[str, ...]], CodexAppServerClient] = (
-            CodexAppServerClient
-        ),
+        environment: Mapping[str, str] | None = None,
+        client_factory: Callable[
+            [tuple[str, ...], Mapping[str, str] | None], CodexAppServerClient
+        ] | None = None,
     ) -> None:
         self._command = command
-        self._client_factory = client_factory
+        self._environment = environment
+        self._client_factory = client_factory or self._create_client
 
     async def read_rate_limits(self) -> dict[str, Any]:
-        client = self._client_factory(self._command)
+        client = self._client_factory(self._command, self._environment)
         await client.start()
         try:
             return await client.read_rate_limits()
         finally:
             await client.close()
+
+    @staticmethod
+    def _create_client(
+        command: tuple[str, ...], environment: Mapping[str, str] | None
+    ) -> CodexAppServerClient:
+        return CodexAppServerClient(command, environment=environment)
+
+
+class CodexAccountRateLimitReader:
+    """Read rate limits from every saved file-backed Codex account profile."""
+
+    def __init__(
+        self,
+        command: tuple[str, ...],
+        profile_store: CodexAccountProfileStore,
+        *,
+        reader_factory: Callable[
+            [tuple[str, ...], Mapping[str, str]], RateLimitReader
+        ] | None = None,
+    ) -> None:
+        self._command = command
+        self._profile_store = profile_store
+        self._reader_factory = reader_factory or self._create_reader
+
+    async def read_all_rate_limits(self) -> tuple[AccountRateLimitResult, ...]:
+        results: list[AccountRateLimitResult] = []
+        for profile in self._profile_store.profiles():
+            try:
+                reader = self._reader_factory(
+                    self._command, {"CODEX_HOME": str(profile.home)}
+                )
+                results.append(
+                    AccountRateLimitResult(
+                        profile.account_id, await reader.read_rate_limits()
+                    )
+                )
+            except CodexAppServerError as exc:
+                LOGGER.warning(
+                    "Codex-Nutzungsabfrage für Konto %s fehlgeschlagen: %s",
+                    profile.account_id,
+                    exc,
+                )
+        if not results:
+            raise CodexAppServerError(
+                "Für kein gespeichertes Codex-Konto konnten Nutzungsdaten gelesen werden."
+            )
+        return tuple(results)
+
+    @staticmethod
+    def _create_reader(
+        command: tuple[str, ...], environment: Mapping[str, str]
+    ) -> RateLimitReader:
+        return CodexAppServerRateLimitReader(command, environment=environment)

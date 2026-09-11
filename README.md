@@ -65,7 +65,7 @@ the directory containing that file.
 | `CODEX_APP_SERVER_COMMAND` | Notifications | App-server command | `codex app-server` |
 | `CODEX_RATE_LIMIT_ID` | Notifications | Codex rate-limit identifier | `codex` |
 | `CODEX_RATE_LIMIT_POLL_SECONDS` | Notifications | Usage polling interval | `1800` |
-| `CODEX_NOTIFICATION_STATE` | Notifications | Monitor state | `data/codex-rate-limit.json` |
+| `CODEX_NOTIFICATION_STATE` | Notifications | Per-account monitor state | `data/codex-rate-limit.json` |
 | `TELEGRAM_NOTIFICATION_LOG` | Notifications | Notification log | `data/logs/telegram-notifications.log` |
 
 Treat the bot token and Telegram session as passwords. Do not commit `.env` or
@@ -89,9 +89,18 @@ tg-notification send "Eigene Benachrichtigung"
 tg-notification run
 ```
 
-The usage monitor starts a fresh local `codex app-server` per poll. It needs an
-existing local Codex login and sends reminders five minutes before, and at, each
-predicted reset for used 5-hour and weekly windows.
+The usage monitor saves each active local Codex login as a private profile in
+`data/codex-accounts/<account_id>/`, then starts a fresh local `codex app-server`
+for every saved profile per poll. It sends reminders five minutes before, and
+at, each predicted reset for used 5-hour and weekly windows of every account.
+To add another account, sign in to it in Codex; the next monitor poll stores
+its profile. Later polls continue to query every saved account profile. Before
+the first start after upgrading, assign a pre-existing ungrouped state to the
+currently signed-in account (a backup is created automatically):
+
+```powershell
+python scripts/migrate_codex_notification_accounts.py
+```
 
 ### Continuous operation
 

@@ -32,10 +32,13 @@ The forwarder keeps source-specific collection blocks and tracked target message
 IDs in SQLite. A reset plans remote target deletion before changing local state;
 when remote deletion fails, local state remains untouched.
 
-The general notification monitor launches a short-lived local Codex app server
-for each poll, reads both observed usage windows, persists them in one JSON
-state file, and schedules pre-reset, predicted-reset, and confirmation checks.
-Unused windows do not schedule reset work.
+The general notification monitor imports the currently active file-backed Codex
+login into an account-specific `CODEX_HOME`, retaining a newer profile token
+when its `last_refresh` is newer. It launches a short-lived local Codex app
+server for every saved account profile per poll, reads both observed usage
+windows, persists them under the respective account ID in one JSON state file,
+and schedules pre-reset, predicted-reset, and confirmation checks. Unused
+windows do not schedule reset work.
 
 ## Design constraints
 

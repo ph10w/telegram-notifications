@@ -1,7 +1,11 @@
 import unittest
 from unittest.mock import patch
 
+from pathlib import Path
+
+from tg_notification.codex_accounts import CodexAccountProfile
 from tg_notification.codex_app_server import (
+    CodexAccountRateLimitReader,
     CodexAppServerRateLimitReader,
     _app_server_subprocess_options,
     extract_rate_limit_snapshot,
@@ -30,12 +34,46 @@ class CodexAppServerRateLimitReaderTests(unittest.IsolatedAsyncioTestCase):
         client = FakeAppServerClient({"rateLimits": {}})
         reader = CodexAppServerRateLimitReader(
             ("codex", "app-server"),
-            client_factory=lambda _: client,  # type: ignore[arg-type]
+            client_factory=lambda _, __: client,  # type: ignore[arg-type]
         )
 
         self.assertEqual(await reader.read_rate_limits(), {"rateLimits": {}})
         self.assertTrue(client.started)
         self.assertTrue(client.closed)
+
+    async def test_reads_every_profile_with_its_own_codex_home(self) -> None:
+        profiles = (
+            CodexAccountProfile("account-a", Path("profiles/account-a")),
+            CodexAccountProfile("account-b", Path("profiles/account-b")),
+        )
+        environments: list[dict[str, str]] = []
+
+        class ProfileStore:
+            def profiles(self) -> tuple[CodexAccountProfile, ...]:
+                return profiles
+
+        def reader_factory(
+            _: tuple[str, ...], environment: dict[str, str]
+        ) -> FakeAppServerClient:
+            environments.append(environment)
+            return FakeAppServerClient({"rateLimits": {}})
+
+        reader = CodexAccountRateLimitReader(
+            ("codex", "app-server"),
+            ProfileStore(),  # type: ignore[arg-type]
+            reader_factory=reader_factory,
+        )
+
+        results = await reader.read_all_rate_limits()
+
+        self.assertEqual([result.account_id for result in results], ["account-a", "account-b"])
+        self.assertEqual(
+            environments,
+            [
+                {"CODEX_HOME": "profiles\\account-a"},
+                {"CODEX_HOME": "profiles\\account-b"},
+            ],
+        )
 
 
 class ExtractRateLimitWindowsTests(unittest.TestCase):

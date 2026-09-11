@@ -4,8 +4,9 @@ import logging
 import sys
 from pathlib import Path
 
-from .codex_app_server import CodexAppServerRateLimitReader
-from .codex_monitor import CodexRateLimitMonitor
+from .codex_accounts import CodexAccountProfileStore
+from .codex_app_server import CodexAccountRateLimitReader
+from .codex_monitor import MultiAccountCodexRateLimitMonitor
 from .config import NotificationConfig, NotificationConfigError
 from tg_api.bot_gateway import TelegramBotGateway
 from tg_api.errors import TelegramApiError
@@ -79,8 +80,14 @@ def main() -> None:
             sink = TelegramNotificationSink(
                 TelegramBotGateway(config.bot_token, config.target_chat)
             )
-            monitor = CodexRateLimitMonitor(
-                CodexAppServerRateLimitReader(config.codex_app_server_command),
+            profile_store = CodexAccountProfileStore(
+                CodexAccountProfileStore.source_home_from_environment(),
+                config.state_path.parent / "codex-accounts",
+            )
+            monitor = MultiAccountCodexRateLimitMonitor(
+                CodexAccountRateLimitReader(
+                    config.codex_app_server_command, profile_store
+                ),
                 sink,
                 state_path=config.state_path,
                 rate_limit_id=config.codex_rate_limit_id,
