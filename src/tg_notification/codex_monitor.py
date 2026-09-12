@@ -58,7 +58,7 @@ class RateLimitStateStore:
                 used_percent=float(payload["used_percent"]),
                 window_duration_minutes=int(payload["window_duration_minutes"]),
                 resets_at=(
-                    int(payload["resets_at"])
+                    _parse_state_timestamp(payload["resets_at"])
                     if payload.get("resets_at") is not None
                     else None
                 ),
@@ -72,9 +72,9 @@ class RateLimitStateStore:
         confirmation_polled = payload.get("last_reset_confirmation_polled_at")
         return (
             snapshot,
-            int(reset_notified) if isinstance(reset_notified, int) else None,
-            int(pre_reset_notified) if isinstance(pre_reset_notified, int) else None,
-            int(confirmation_polled) if isinstance(confirmation_polled, int) else None,
+            _parse_state_timestamp(reset_notified),
+            _parse_state_timestamp(pre_reset_notified),
+            _parse_state_timestamp(confirmation_polled),
         )
 
     def save(
@@ -84,13 +84,22 @@ class RateLimitStateStore:
         last_reset_notified_at: int | None,
         last_pre_reset_notified_at: int | None,
         last_reset_confirmation_polled_at: int | None,
+        last_polled_at: int | None = None,
     ) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         window_payload: dict[str, Any] = {
             **asdict(snapshot),
-            "last_reset_notified_at": last_reset_notified_at,
-            "last_pre_reset_notified_at": last_pre_reset_notified_at,
-            "last_reset_confirmation_polled_at": last_reset_confirmation_polled_at,
+            "resets_at": _format_state_timestamp(snapshot.resets_at),
+            "last_reset_notified_at": _format_state_timestamp(
+                last_reset_notified_at
+            ),
+            "last_pre_reset_notified_at": _format_state_timestamp(
+                last_pre_reset_notified_at
+            ),
+            "last_reset_confirmation_polled_at": _format_state_timestamp(
+                last_reset_confirmation_polled_at
+            ),
+            "last_polled_at": _format_state_timestamp(last_polled_at),
         }
         try:
             payload = json.loads(self._path.read_text(encoding="utf-8"))
@@ -111,6 +120,10 @@ class RateLimitStateStore:
             account_payload = accounts.get(self._account_id)
             if not isinstance(account_payload, dict):
                 account_payload = {}
+            if last_polled_at is not None:
+                account_payload["last_polled_at"] = _format_state_timestamp(
+                    last_polled_at
+                )
             windows = account_payload.get("windows")
             if not isinstance(windows, dict):
                 windows = {}
@@ -123,6 +136,28 @@ class RateLimitStateStore:
             json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
         temporary.replace(self._path)
+
+
+def _format_state_timestamp(value: int | None) -> int | str | None:
+    if value is None:
+        return None
+    try:
+        return datetime.fromtimestamp(value).astimezone().isoformat(timespec="seconds")
+    except (OSError, OverflowError, ValueError):
+        return value
+
+
+def _parse_state_timestamp(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(datetime.fromisoformat(value).timestamp())
+        except ValueError:
+            return None
+    return None
 
 
 def _reset_detected(
@@ -352,6 +387,9 @@ class CodexRateLimitMonitor:
             last_reset_notified_at=last_reset_notified,
             last_pre_reset_notified_at=last_pre_reset_notified,
             last_reset_confirmation_polled_at=last_reset_confirmation_polled,
+            last_polled_at=(
+                int(time.time()) if self._account_id is not None else None
+            ),
         )
         return notified_now
 

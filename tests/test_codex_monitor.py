@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -239,6 +240,81 @@ class CodexRateLimitMonitorTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 set(payload["accounts"]),
                 {"account-alpha-12345", "account-beta-67890"},
+            )
+            for account_payload in payload["accounts"].values():
+                self.assertIsInstance(account_payload["last_polled_at"], str)
+                datetime.fromisoformat(account_payload["last_polled_at"])
+
+    async def test_reads_legacy_epoch_timestamp_state(self) -> None:
+        reset_at = 2_000_000_000
+        with tempfile.TemporaryDirectory() as directory:
+            state_path = Path(directory) / "state.json"
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "accounts": {
+                            "account-alpha-12345": {
+                                "windows": {
+                                    "five_hour": {
+                                        "limit_id": "codex",
+                                        "used_percent": 100,
+                                        "window_duration_minutes": 300,
+                                        "resets_at": reset_at,
+                                        "last_reset_notified_at": reset_at,
+                                        "last_pre_reset_notified_at": None,
+                                        "last_reset_confirmation_polled_at": None,
+                                    }
+                                }
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            monitor = MultiAccountCodexRateLimitMonitor(
+                RecordingAccountReader([]),
+                RecordingSink(),
+                state_path=state_path,
+            )
+            window_monitor = monitor._monitor_for("account-alpha-12345")
+            snapshot, last_reset_notified, _, _ = window_monitor._state.load()
+            self.assertEqual(snapshot.used_percent, 100)
+            self.assertEqual(snapshot.resets_at, reset_at)
+            self.assertEqual(last_reset_notified, reset_at)
+
+    async def test_last_polled_at_only_changes_on_real_polls(self) -> None:
+        reset_at = 2_000_000_000
+        with tempfile.TemporaryDirectory() as directory:
+            monitor = MultiAccountCodexRateLimitMonitor(
+                RecordingAccountReader(
+                    [
+                        (
+                            AccountRateLimitResult(
+                                "account-alpha-12345",
+                                _rate_limits(used_percent=100, resets_at=reset_at),
+                            ),
+                        )
+                    ]
+                ),
+                RecordingSink(),
+                state_path=Path(directory) / "state.json",
+            )
+            await monitor.check_once()
+            state_path = Path(directory) / "state.json"
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+            polled_at = payload["accounts"]["account-alpha-12345"]["last_polled_at"]
+
+            with patch(
+                "tg_notification.codex_monitor.time.time", return_value=reset_at - 1
+            ):
+                await monitor._monitor_for(
+                    "account-alpha-12345"
+                )._send_due_scheduled_notifications()
+
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                payload["accounts"]["account-alpha-12345"]["last_polled_at"],
+                polled_at,
             )
 
     async def test_predicted_reset_prevents_duplicate_after_following_poll(self) -> None:

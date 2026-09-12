@@ -36,7 +36,8 @@ The general notification monitor imports the currently active file-backed Codex
 login into an account-specific `CODEX_HOME`, retaining a newer profile token
 when its `last_refresh` is newer. It launches a short-lived local Codex app
 server for every saved account profile per poll, reads both observed usage
-windows, persists them under the respective account ID in one JSON state file,
+windows, persists them with a per-poll `last_polled_at` timestamp under the
+respective account ID in one JSON state file,
 and schedules pre-reset, predicted-reset, and confirmation checks. Unused
 windows do not schedule reset work.
 
