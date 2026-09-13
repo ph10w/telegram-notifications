@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .codex_accounts import CodexAccountProfileStore
 from .codex_app_server import (
     AccountRateLimitReader,
     RateLimitSnapshot,
@@ -99,7 +100,6 @@ class RateLimitStateStore:
             "last_reset_confirmation_polled_at": _format_state_timestamp(
                 last_reset_confirmation_polled_at
             ),
-            "last_polled_at": _format_state_timestamp(last_polled_at),
         }
         try:
             payload = json.loads(self._path.read_text(encoding="utf-8"))
@@ -541,7 +541,11 @@ class CodexRateLimitMonitor:
 
 
 class MultiAccountCodexRateLimitMonitor:
-    """Poll every saved Codex account while keeping each account state isolated."""
+    """Poll the signed-in Codex account while keeping every account state isolated.
+
+    Only the currently signed-in account is polled. Notification timers of the
+    other saved accounts keep running from their stored reset timestamps.
+    """
 
     def __init__(
         self,
@@ -551,19 +555,28 @@ class MultiAccountCodexRateLimitMonitor:
         state_path: Path,
         rate_limit_id: str = "codex",
         poll_seconds: float = 60.0,
+        profile_store: CodexAccountProfileStore | None = None,
     ) -> None:
         self._reader = reader
         self._sink = sink
         self._state_path = state_path
         self._rate_limit_id = rate_limit_id
         self._poll_seconds = poll_seconds
+        self._profile_store = profile_store
         self._monitors: dict[str, CodexRateLimitMonitor] = {}
+
+    def _ensure_saved_account_monitors(self) -> None:
+        if self._profile_store is None:
+            return
+        for profile in self._profile_store.profiles():
+            self._monitor_for(profile.account_id)
 
     async def run(self) -> None:
         LOGGER.info(
             "Mehrkonto-Codex-Nutzungsmonitor gestartet; Abfrage alle %g Sekunden.",
             self._poll_seconds,
         )
+        self._ensure_saved_account_monitors()
         await self.check_once(report_limits=True)
         next_poll_at = asyncio.get_running_loop().time() + self._poll_seconds
         while True:
@@ -599,8 +612,9 @@ class MultiAccountCodexRateLimitMonitor:
                 next_poll_at = asyncio.get_running_loop().time() + self._poll_seconds
 
     async def check_once(self, *, report_limits: bool = False) -> bool:
+        self._ensure_saved_account_monitors()
         notified_now = False
-        for result in await self._reader.read_all_rate_limits():
+        for result in await self._reader.read_active_rate_limits():
             if report_limits:
                 windows = extract_rate_limit_windows(
                     result.payload, limit_id=self._rate_limit_id

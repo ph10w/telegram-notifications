@@ -91,10 +91,12 @@ tg-notification run
 
 The usage monitor saves each active local Codex login as a private profile in
 `data/codex-accounts/<account_id>/`, then starts a fresh local `codex app-server`
-for every saved profile per poll. It sends reminders five minutes before, and
-at, each predicted reset for used 5-hour and weekly windows of every account.
-To add another account, sign in to it in Codex; the next monitor poll stores
-its profile. Later polls continue to query every saved account profile. Before
+for the currently signed-in profile per poll. It sends reminders five minutes
+before, and at, each predicted reset for used 5-hour and weekly windows of every
+saved account. To add another account, sign in to it in Codex; the next monitor
+poll stores its profile. Only the currently signed-in account is polled; the
+other accounts keep their stored reset timestamps and their scheduled
+notifications continue. Before
 the first start after upgrading, assign a pre-existing ungrouped state to the
 currently signed-in account (a backup is created automatically):
 
@@ -123,10 +125,11 @@ install `gsudo` with `winget install gerardog.gsudo`. Remove the service with:
 ```
 
 For `tg-notification`, install the per-user notification task (uses
-`pythonw.exe` and no console window):
+`pythonw.exe` and no console window). The script restarts a running monitor
+by default; pass `-NoStart` to only update the task definition:
 
 ```powershell
-.\scripts\Install-Windows-TgNotificationsTask.ps1 -StartNow
+.\scripts\Install-Windows-TgNotificationsTask.ps1
 ```
 
 On Raspberry Pi OS, install the forwarder service after configuring `.env`:

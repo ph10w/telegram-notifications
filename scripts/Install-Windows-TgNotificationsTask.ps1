@@ -1,11 +1,16 @@
 #requires -Version 7.6
 [CmdletBinding(SupportsShouldProcess)]
 param(
-    [switch]$StartNow
+    [switch]$StartNow,
+    [switch]$NoStart
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+if (-not $PSBoundParameters.ContainsKey('StartNow')) {
+    $StartNow = -not $NoStart
+}
 
 $taskName = 'TelegramNotifications'
 $projectDirectory = Split-Path -Parent $PSScriptRoot
@@ -52,18 +57,33 @@ if ($PSCmdlet.ShouldProcess("scheduled task '$taskName'", 'register or update'))
 }
 
 if ($StartNow -and -not $WhatIfPreference) {
+    $findMonitorProcesses = {
+        Get-CimInstance Win32_Process -Filter "Name = 'pythonw.exe' OR Name = 'python.exe'" |
+            Where-Object { $_.CommandLine -like '*-m tg_notification run*' }
+    }
+
     $installedTask = Get-ScheduledTask -TaskName $taskName
     if ($installedTask.State -eq 'Running') {
         if ($PSCmdlet.ShouldProcess("scheduled task '$taskName'", 'stop running instance')) {
             Stop-ScheduledTask -TaskName $taskName
-            $deadline = [DateTime]::UtcNow.AddSeconds(30)
-            do {
-                Start-Sleep -Milliseconds 250
-                $installedTask = Get-ScheduledTask -TaskName $taskName
-            } while ($installedTask.State -eq 'Running' -and [DateTime]::UtcNow -lt $deadline)
+        }
+    }
 
-            if ($installedTask.State -eq 'Running') {
-                throw "Scheduled task '$taskName' did not stop within 30 seconds."
+    $monitorProcesses = @(& $findMonitorProcesses)
+    $deadline = [DateTime]::UtcNow.AddSeconds(30)
+    while ($monitorProcesses.Count -gt 0 -and [DateTime]::UtcNow -lt $deadline) {
+        Start-Sleep -Milliseconds 250
+        $monitorProcesses = @(& $findMonitorProcesses)
+    }
+
+    if ($monitorProcesses.Count -gt 0) {
+        if ($PSCmdlet.ShouldProcess(
+                ($monitorProcesses.ProcessId -join ', '),
+                'force-stop leftover notification monitor processes'
+            )) {
+            foreach ($process in $monitorProcesses) {
+                Stop-Process -Id $process.ProcessId -Force
+                Wait-Process -Id $process.ProcessId -ErrorAction SilentlyContinue -Timeout 10
             }
         }
     }

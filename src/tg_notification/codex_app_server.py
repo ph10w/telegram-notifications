@@ -285,7 +285,7 @@ class CodexAppServerRateLimitReader:
 
 
 class CodexAccountRateLimitReader:
-    """Read rate limits from every saved file-backed Codex account profile."""
+    """Read rate limits for the currently signed-in Codex account profile."""
 
     def __init__(
         self,
@@ -300,29 +300,26 @@ class CodexAccountRateLimitReader:
         self._profile_store = profile_store
         self._reader_factory = reader_factory or self._create_reader
 
-    async def read_all_rate_limits(self) -> tuple[AccountRateLimitResult, ...]:
-        results: list[AccountRateLimitResult] = []
-        for profile in self._profile_store.profiles():
-            try:
-                reader = self._reader_factory(
-                    self._command, {"CODEX_HOME": str(profile.home)}
-                )
-                results.append(
-                    AccountRateLimitResult(
-                        profile.account_id, await reader.read_rate_limits()
-                    )
-                )
-            except CodexAppServerError as exc:
-                LOGGER.warning(
-                    "Codex-Nutzungsabfrage für Konto %s fehlgeschlagen: %s",
-                    profile.account_id,
-                    exc,
-                )
-        if not results:
-            raise CodexAppServerError(
-                "Für kein gespeichertes Codex-Konto konnten Nutzungsdaten gelesen werden."
+    async def read_active_rate_limits(self) -> tuple[AccountRateLimitResult, ...]:
+        profile = self._profile_store.active_profile()
+        if profile is None:
+            return ()
+        try:
+            reader = self._reader_factory(
+                self._command, {"CODEX_HOME": str(profile.home)}
             )
-        return tuple(results)
+            return (
+                AccountRateLimitResult(
+                    profile.account_id, await reader.read_rate_limits()
+                ),
+            )
+        except CodexAppServerError as exc:
+            LOGGER.warning(
+                "Codex-Nutzungsabfrage für Konto %s fehlgeschlagen: %s",
+                profile.account_id,
+                exc,
+            )
+            return ()
 
     @staticmethod
     def _create_reader(

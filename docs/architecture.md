@@ -35,10 +35,13 @@ when remote deletion fails, local state remains untouched.
 The general notification monitor imports the currently active file-backed Codex
 login into an account-specific `CODEX_HOME`, retaining a newer profile token
 when its `last_refresh` is newer. It launches a short-lived local Codex app
-server for every saved account profile per poll, reads both observed usage
-windows, persists them with a per-poll `last_polled_at` timestamp under the
-respective account ID in one JSON state file,
-and schedules pre-reset, predicted-reset, and confirmation checks. Unused
+server for the currently signed-in account profile per poll, reads both
+observed usage windows, persists them with a per-poll `last_polled_at`
+timestamp under the respective account ID in one JSON state file,
+and schedules pre-reset, predicted-reset, and confirmation checks. Monitor
+instances for the other saved accounts are created as well, so their
+notification timers keep running from the stored reset timestamps without
+polling them. Unused
 windows do not schedule reset work.
 
 ## Design constraints

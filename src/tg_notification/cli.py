@@ -92,6 +92,7 @@ def main() -> None:
                 state_path=config.state_path,
                 rate_limit_id=config.codex_rate_limit_id,
                 poll_seconds=config.codex_poll_seconds,
+                profile_store=profile_store,
             )
             asyncio.run(monitor.run())
         else:

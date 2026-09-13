@@ -118,6 +118,10 @@ class CodexAccountProfileStore:
         self._ensure_file_credential_store(profile)
         return profile
 
+    def active_profile(self) -> CodexAccountProfile | None:
+        """Return the profile of the account signed in via the source auth file."""
+        return self.synchronize_current_account()
+
     def profiles(self) -> tuple[CodexAccountProfile, ...]:
         self.synchronize_current_account()
         try:

@@ -41,16 +41,13 @@ class CodexAppServerRateLimitReaderTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(client.started)
         self.assertTrue(client.closed)
 
-    async def test_reads_every_profile_with_its_own_codex_home(self) -> None:
-        profiles = (
-            CodexAccountProfile("account-a", Path("profiles/account-a")),
-            CodexAccountProfile("account-b", Path("profiles/account-b")),
-        )
+    async def test_reads_only_the_active_profile_with_its_own_codex_home(self) -> None:
+        active = CodexAccountProfile("account-a", Path("profiles/account-a"))
         environments: list[dict[str, str]] = []
 
         class ProfileStore:
-            def profiles(self) -> tuple[CodexAccountProfile, ...]:
-                return profiles
+            def active_profile(self) -> CodexAccountProfile | None:
+                return active
 
         def reader_factory(
             _: tuple[str, ...], environment: dict[str, str]
@@ -64,16 +61,23 @@ class CodexAppServerRateLimitReaderTests(unittest.IsolatedAsyncioTestCase):
             reader_factory=reader_factory,
         )
 
-        results = await reader.read_all_rate_limits()
+        results = await reader.read_active_rate_limits()
 
-        self.assertEqual([result.account_id for result in results], ["account-a", "account-b"])
-        self.assertEqual(
-            environments,
-            [
-                {"CODEX_HOME": "profiles\\account-a"},
-                {"CODEX_HOME": "profiles\\account-b"},
-            ],
+        self.assertEqual([result.account_id for result in results], ["account-a"])
+        self.assertEqual(environments, [{"CODEX_HOME": "profiles\\account-a"}])
+
+    async def test_returns_no_results_without_an_active_profile(self) -> None:
+        class ProfileStore:
+            def active_profile(self) -> CodexAccountProfile | None:
+                return None
+
+        reader = CodexAccountRateLimitReader(
+            ("codex", "app-server"),
+            ProfileStore(),  # type: ignore[arg-type]
+            reader_factory=lambda _, __: FakeAppServerClient({"rateLimits": {}}),
         )
+
+        self.assertEqual(await reader.read_active_rate_limits(), ())
 
 
 class ExtractRateLimitWindowsTests(unittest.TestCase):

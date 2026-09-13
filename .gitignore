@@ -9,3 +9,4 @@ data/
 tools/*.exe
 *.session
 *.session-journal
+conversation.md

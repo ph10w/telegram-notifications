@@ -3,6 +3,8 @@ import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 from unittest.mock import patch
 
 from tg_notification.codex_monitor import CodexRateLimitMonitor
@@ -32,8 +34,16 @@ class RecordingAccountReader:
     def __init__(self, reads: list[tuple[AccountRateLimitResult, ...]]) -> None:
         self._reads = iter(reads)
 
-    async def read_all_rate_limits(self) -> tuple[AccountRateLimitResult, ...]:
+    async def read_active_rate_limits(self) -> tuple[AccountRateLimitResult, ...]:
         return next(self._reads)
+
+
+class FakeProfileStore:
+    def __init__(self, account_ids: tuple[str, ...]) -> None:
+        self._account_ids = account_ids
+
+    def profiles(self) -> tuple[Any, ...]:
+        return tuple(SimpleNamespace(account_id=item) for item in self._account_ids)
 
 
 def _rate_limits(*, used_percent: float, resets_at: int) -> dict[str, object]:
@@ -244,6 +254,67 @@ class CodexRateLimitMonitorTests(unittest.IsolatedAsyncioTestCase):
             for account_payload in payload["accounts"].values():
                 self.assertIsInstance(account_payload["last_polled_at"], str)
                 datetime.fromisoformat(account_payload["last_polled_at"])
+
+    async def test_polls_only_active_account_but_keeps_timers_for_saved_accounts(
+        self,
+    ) -> None:
+        active_reset = 2_000_000_000
+        inactive_reset = 1_000_000_000
+        with tempfile.TemporaryDirectory() as directory:
+            state_path = Path(directory) / "state.json"
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "accounts": {
+                            "account-inactive": {
+                                "windows": {
+                                    "five_hour": {
+                                        "limit_id": "codex",
+                                        "used_percent": 100,
+                                        "window_duration_minutes": 300,
+                                        "resets_at": inactive_reset,
+                                        "last_reset_notified_at": None,
+                                        "last_pre_reset_notified_at": None,
+                                        "last_reset_confirmation_polled_at": None,
+                                    }
+                                }
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            sink = RecordingSink()
+            monitor = MultiAccountCodexRateLimitMonitor(
+                RecordingAccountReader(
+                    [
+                        (
+                            AccountRateLimitResult(
+                                "account-active",
+                                _rate_limits(used_percent=50, resets_at=active_reset),
+                            ),
+                        ),
+                    ]
+                ),
+                sink,
+                state_path=state_path,
+                profile_store=FakeProfileStore(("account-active", "account-inactive")),
+            )
+
+            await monitor.check_once()
+
+            self.assertEqual(set(monitor._monitors), {"account-active", "account-inactive"})
+            for saved_monitor in monitor._monitors.values():
+                await saved_monitor._send_due_scheduled_notifications()
+            self.assertEqual(len(sink.messages), 1)
+            self.assertIn("Konto account-…", sink.messages[0])
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+            notified = payload["accounts"]["account-inactive"]["windows"]["five_hour"][
+                "last_reset_notified_at"
+            ]
+            self.assertEqual(
+                int(datetime.fromisoformat(notified).timestamp()), inactive_reset
+            )
 
     async def test_reads_legacy_epoch_timestamp_state(self) -> None:
         reset_at = 2_000_000_000
