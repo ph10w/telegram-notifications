@@ -14,8 +14,11 @@ from tg_notification.codex_app_server import (
 
 
 class FakeAppServerClient:
-    def __init__(self, payload: dict[str, object]) -> None:
+    def __init__(
+        self, payload: dict[str, object], account_email: str | None = None
+    ) -> None:
         self._payload = payload
+        self._account_email = account_email
         self.started = False
         self.closed = False
 
@@ -24,6 +27,9 @@ class FakeAppServerClient:
 
     async def read_rate_limits(self) -> dict[str, object]:
         return self._payload
+
+    async def read_account_email(self) -> str | None:
+        return self._account_email
 
     async def close(self) -> None:
         self.closed = True
@@ -65,6 +71,29 @@ class CodexAppServerRateLimitReaderTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([result.account_id for result in results], ["account-a"])
         self.assertEqual(environments, [{"CODEX_HOME": "profiles\\account-a"}])
+
+    async def test_returns_the_active_account_email(self) -> None:
+        active = CodexAccountProfile("account-a", Path("profiles/account-a"))
+
+        class ProfileStore:
+            def active_profile(self) -> CodexAccountProfile | None:
+                return active
+
+        client = FakeAppServerClient(
+            {"rateLimits": {}}, account_email="person@example.com"
+        )
+        reader = CodexAccountRateLimitReader(
+            ("codex", "app-server"),
+            ProfileStore(),  # type: ignore[arg-type]
+            reader_factory=lambda _, __: CodexAppServerRateLimitReader(
+                ("codex", "app-server"),
+                client_factory=lambda ___, ____: client,  # type: ignore[arg-type]
+            ),
+        )
+
+        results = await reader.read_active_rate_limits()
+
+        self.assertEqual(results[0].account_email, "person@example.com")
 
     async def test_returns_no_results_without_an_active_profile(self) -> None:
         class ProfileStore:

@@ -38,6 +38,7 @@ class RateLimitReader(Protocol):
 class AccountRateLimitResult:
     account_id: str
     payload: dict[str, Any]
+    account_email: str | None = None
 
 
 class AccountRateLimitReader(Protocol):
@@ -190,6 +191,16 @@ class CodexAppServerClient:
             )
         return result
 
+    async def read_account_email(self) -> str | None:
+        result = await self._request("account/read", {"refreshToken": False})
+        if not isinstance(result, dict):
+            return None
+        account = result.get("account")
+        if not isinstance(account, dict):
+            return None
+        email = account.get("email")
+        return email.strip() if isinstance(email, str) and email.strip() else None
+
     async def wait_for_rate_limit_update(self, timeout: float) -> dict[str, Any] | None:
         deadline = asyncio.get_running_loop().time() + timeout
         while True:
@@ -277,6 +288,17 @@ class CodexAppServerRateLimitReader:
         finally:
             await client.close()
 
+    async def read_rate_limits_with_email(
+        self,
+    ) -> tuple[dict[str, Any], str | None]:
+        client = self._client_factory(self._command, self._environment)
+        await client.start()
+        try:
+            payload = await client.read_rate_limits()
+            return payload, await client.read_account_email()
+        finally:
+            await client.close()
+
     @staticmethod
     def _create_client(
         command: tuple[str, ...], environment: Mapping[str, str] | None
@@ -308,11 +330,13 @@ class CodexAccountRateLimitReader:
             reader = self._reader_factory(
                 self._command, {"CODEX_HOME": str(profile.home)}
             )
-            return (
-                AccountRateLimitResult(
-                    profile.account_id, await reader.read_rate_limits()
-                ),
-            )
+            combined_reader = getattr(reader, "read_rate_limits_with_email", None)
+            if callable(combined_reader):
+                payload, account_email = await combined_reader()
+            else:
+                payload = await reader.read_rate_limits()
+                account_email = None
+            return (AccountRateLimitResult(profile.account_id, payload, account_email),)
         except CodexAppServerError as exc:
             LOGGER.warning(
                 "Codex-Nutzungsabfrage für Konto %s fehlgeschlagen: %s",

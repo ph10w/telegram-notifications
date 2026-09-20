@@ -228,10 +228,12 @@ class CodexRateLimitMonitorTests(unittest.IsolatedAsyncioTestCase):
                             AccountRateLimitResult(
                                 "account-alpha-12345",
                                 _rate_limits(used_percent=0, resets_at=second_reset),
+                                "alpha@example.com",
                             ),
                             AccountRateLimitResult(
                                 "account-beta-67890",
                                 _rate_limits(used_percent=0, resets_at=second_reset),
+                                "beta@example.com",
                             ),
                         ),
                     ]
@@ -244,8 +246,8 @@ class CodexRateLimitMonitorTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(await monitor.check_once())
 
             self.assertEqual(len(sink.messages), 2)
-            self.assertIn("Konto account-…", sink.messages[0])
-            self.assertIn("Konto account-…", sink.messages[1])
+            self.assertIn("Konto alpha@example.com", sink.messages[0])
+            self.assertIn("Konto beta@example.com", sink.messages[1])
             payload = json.loads((Path(directory) / "state.json").read_text(encoding="utf-8"))
             self.assertEqual(
                 set(payload["accounts"]),
@@ -254,6 +256,10 @@ class CodexRateLimitMonitorTests(unittest.IsolatedAsyncioTestCase):
             for account_payload in payload["accounts"].values():
                 self.assertIsInstance(account_payload["last_polled_at"], str)
                 datetime.fromisoformat(account_payload["last_polled_at"])
+            self.assertEqual(
+                {payload["accounts"][key]["email"] for key in payload["accounts"]},
+                {"alpha@example.com", "beta@example.com"},
+            )
 
     async def test_polls_only_active_account_but_keeps_timers_for_saved_accounts(
         self,
@@ -315,6 +321,49 @@ class CodexRateLimitMonitorTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 int(datetime.fromisoformat(notified).timestamp()), inactive_reset
             )
+
+    async def test_uses_saved_account_email_for_notifications_after_restart(self) -> None:
+        reset_at = 1_000_000_000
+        with tempfile.TemporaryDirectory() as directory:
+            state_path = Path(directory) / "state.json"
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "accounts": {
+                            "account-inactive": {
+                                "email": "inactive@example.com",
+                                "windows": {
+                                    "five_hour": {
+                                        "limit_id": "codex",
+                                        "used_percent": 100,
+                                        "window_duration_minutes": 300,
+                                        "resets_at": reset_at,
+                                        "last_reset_notified_at": None,
+                                        "last_pre_reset_notified_at": None,
+                                        "last_reset_confirmation_polled_at": None,
+                                    }
+                                },
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            sink = RecordingSink()
+            monitor = MultiAccountCodexRateLimitMonitor(
+                RecordingAccountReader([]),
+                sink,
+                state_path=state_path,
+                profile_store=FakeProfileStore(("account-inactive",)),
+            )
+
+            monitor._ensure_saved_account_monitors()
+            await monitor._monitor_for(
+                "account-inactive"
+            )._send_due_scheduled_notifications()
+
+            self.assertEqual(len(sink.messages), 1)
+            self.assertIn("Konto inactive@example.com", sink.messages[0])
 
     async def test_reads_legacy_epoch_timestamp_state(self) -> None:
         reset_at = 2_000_000_000

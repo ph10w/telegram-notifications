@@ -86,6 +86,7 @@ class RateLimitStateStore:
         last_pre_reset_notified_at: int | None,
         last_reset_confirmation_polled_at: int | None,
         last_polled_at: int | None = None,
+        account_email: str | None = None,
     ) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         window_payload: dict[str, Any] = {
@@ -124,6 +125,8 @@ class RateLimitStateStore:
                 account_payload["last_polled_at"] = _format_state_timestamp(
                     last_polled_at
                 )
+            if account_email is not None:
+                account_payload["email"] = account_email
             windows = account_payload.get("windows")
             if not isinstance(windows, dict):
                 windows = {}
@@ -136,6 +139,16 @@ class RateLimitStateStore:
             json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
         temporary.replace(self._path)
+
+    def account_email(self) -> str | None:
+        if self._account_id is None:
+            return None
+        try:
+            payload = json.loads(self._path.read_text(encoding="utf-8"))
+            email = payload["accounts"][self._account_id].get("email")
+        except (FileNotFoundError, OSError, json.JSONDecodeError, KeyError, TypeError):
+            return None
+        return email.strip() if isinstance(email, str) and email.strip() else None
 
 
 def _format_state_timestamp(value: int | None) -> int | str | None:
@@ -273,6 +286,7 @@ class CodexRateLimitMonitor:
         poll_seconds: float = 60.0,
         additional_window_minutes: tuple[int, ...] = (WEEKLY_WINDOW_MINUTES,),
         account_id: str | None = None,
+        account_email: str | None = None,
     ) -> None:
         self._reader = reader
         self._sink = sink
@@ -282,6 +296,7 @@ class CodexRateLimitMonitor:
             account_id=account_id,
         )
         self._account_id = account_id
+        self._account_email = account_email or self._state.account_email()
         self._rate_limit_id = rate_limit_id
         self._window_minutes = window_minutes
         self._poll_seconds = poll_seconds
@@ -295,6 +310,7 @@ class CodexRateLimitMonitor:
                 poll_seconds=poll_seconds,
                 additional_window_minutes=(),
                 account_id=account_id,
+                account_email=self._account_email,
             )
             for additional_window in additional_window_minutes
             if additional_window != window_minutes
@@ -390,6 +406,7 @@ class CodexRateLimitMonitor:
             last_polled_at=(
                 int(time.time()) if self._account_id is not None else None
             ),
+            account_email=self._account_email,
         )
         return notified_now
 
@@ -537,7 +554,16 @@ class CodexRateLimitMonitor:
     def _notification_prefix(self) -> str:
         if self._account_id is None:
             return "Codex-Nutzung\n\n"
+        if self._account_email is not None:
+            return f"Codex-Nutzung – Konto {self._account_email}\n\n"
         return f"Codex-Nutzung – Konto {_display_account_id(self._account_id)}\n\n"
+
+    def set_account_email(self, account_email: str | None) -> None:
+        if account_email is None:
+            return
+        self._account_email = account_email
+        for monitor in self._additional_monitors:
+            monitor.set_account_email(account_email)
 
 
 class MultiAccountCodexRateLimitMonitor:
@@ -631,11 +657,13 @@ class MultiAccountCodexRateLimitMonitor:
                         "Codex-Nutzungsfenster.",
                         result.account_id,
                     )
-            monitor = self._monitor_for(result.account_id)
+            monitor = self._monitor_for(result.account_id, result.account_email)
             notified_now = await monitor.observe(result.payload) or notified_now
         return notified_now
 
-    def _monitor_for(self, account_id: str) -> CodexRateLimitMonitor:
+    def _monitor_for(
+        self, account_id: str, account_email: str | None = None
+    ) -> CodexRateLimitMonitor:
         monitor = self._monitors.get(account_id)
         if monitor is None:
             monitor = CodexRateLimitMonitor(
@@ -645,6 +673,9 @@ class MultiAccountCodexRateLimitMonitor:
                 rate_limit_id=self._rate_limit_id,
                 poll_seconds=self._poll_seconds,
                 account_id=account_id,
+                account_email=account_email,
             )
             self._monitors[account_id] = monitor
+        else:
+            monitor.set_account_email(account_email)
         return monitor
