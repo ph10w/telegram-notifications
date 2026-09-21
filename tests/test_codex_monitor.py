@@ -144,7 +144,9 @@ class CodexRateLimitMonitorTests(unittest.IsolatedAsyncioTestCase):
             )
             await monitor.observe(_rate_limits(used_percent=100, resets_at=reset_at))
 
-            with patch("tg_notification.codex_monitor.time.time", return_value=reset_at - 300):
+            with patch("tg_notification.codex_monitor.time.time", return_value=reset_at - 601):
+                self.assertFalse(await monitor._send_due_scheduled_notifications())
+            with patch("tg_notification.codex_monitor.time.time", return_value=reset_at - 600):
                 self.assertTrue(await monitor._send_due_scheduled_notifications())
                 self.assertFalse(await monitor._send_due_scheduled_notifications())
             with patch("tg_notification.codex_monitor.time.time", return_value=reset_at):
@@ -152,7 +154,7 @@ class CodexRateLimitMonitorTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(await monitor._send_due_scheduled_notifications())
 
             self.assertEqual(len(sink.messages), 2)
-            self.assertIn("in 5 Minuten", sink.messages[0])
+            self.assertIn("in 10 Minuten", sink.messages[0])
             self.assertIn("wird jetzt", sink.messages[1])
 
     async def test_sends_weekly_pre_reset_and_predicted_reset_notifications_once(self) -> None:
@@ -174,14 +176,16 @@ class CodexRateLimitMonitorTests(unittest.IsolatedAsyncioTestCase):
                 )
             )
 
-            with patch("tg_notification.codex_monitor.time.time", return_value=weekly_reset_at - 300):
+            with patch("tg_notification.codex_monitor.time.time", return_value=weekly_reset_at - 1_201):
+                self.assertFalse(await monitor._send_due_scheduled_notifications())
+            with patch("tg_notification.codex_monitor.time.time", return_value=weekly_reset_at - 1_200):
                 self.assertTrue(await monitor._send_due_scheduled_notifications())
             with patch("tg_notification.codex_monitor.time.time", return_value=weekly_reset_at):
                 self.assertTrue(await monitor._send_due_scheduled_notifications())
 
             self.assertEqual(len(sink.messages), 2)
             self.assertIn("Wochen-Nutzungsfenster", sink.messages[0])
-            self.assertIn("in 5 Minuten", sink.messages[0])
+            self.assertIn("in 20 Minuten", sink.messages[0])
             self.assertIn("Wochen-Nutzungsfenster", sink.messages[1])
             self.assertIn("wird jetzt", sink.messages[1])
 

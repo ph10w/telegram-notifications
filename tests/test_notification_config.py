@@ -26,6 +26,7 @@ class NotificationConfigTests(unittest.TestCase):
             (r"D:\Tools\Codex\codex.exe", "app-server"),
         )
         self.assertEqual(config.target_chat, -100123)
+        self.assertEqual(config.codex_poll_seconds, 900.0)
         self.assertEqual(config.state_path, Path(r"D:\runtime\state.json"))
         self.assertEqual(config.log_path, Path(r"D:\runtime\notifications.log"))
 

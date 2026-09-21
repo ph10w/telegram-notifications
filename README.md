@@ -64,7 +64,7 @@ the directory containing that file.
 | `CODEX_APP_SERVER_EXECUTABLE` | Notifications | Absolute Codex executable; takes precedence over command | — |
 | `CODEX_APP_SERVER_COMMAND` | Notifications | App-server command | `codex app-server` |
 | `CODEX_RATE_LIMIT_ID` | Notifications | Codex rate-limit identifier | `codex` |
-| `CODEX_RATE_LIMIT_POLL_SECONDS` | Notifications | Usage polling interval | `1800` |
+| `CODEX_RATE_LIMIT_POLL_SECONDS` | Notifications | Usage polling interval | `900` |
 | `CODEX_NOTIFICATION_STATE` | Notifications | Per-account monitor state | `data/codex-rate-limit.json` |
 | `TELEGRAM_NOTIFICATION_LOG` | Notifications | Notification log | `data/logs/telegram-notifications.log` |
 
@@ -91,11 +91,11 @@ tg-notification run
 
 The usage monitor saves each active local Codex login as a private profile in
 `data/codex-accounts/<account_id>/`, then starts a fresh local `codex app-server`
-for the currently signed-in profile per poll. It sends reminders five minutes
-before, and at, each predicted reset for used 5-hour and weekly windows of every
-saved account. To add another account, sign in to it in Codex; the next monitor
-poll stores its profile. Only the currently signed-in account is polled; the
-other accounts keep their stored reset timestamps and their scheduled
+for the currently signed-in profile per poll. It sends reminders 10 minutes
+before each used 5-hour reset, 20 minutes before each used weekly reset, and at
+every predicted reset. To add another account, sign in to it in Codex; the next
+monitor poll stores its profile. Only the currently signed-in account is polled;
+the other accounts keep their stored reset timestamps and their scheduled
 notifications continue. Before
 the first start after upgrading, assign a pre-existing ungrouped state to the
 currently signed-in account (a backup is created automatically):

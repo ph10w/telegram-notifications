@@ -118,7 +118,7 @@ class NotificationConfig:
                 os.getenv("CODEX_RATE_LIMIT_ID", "codex").strip() or "codex"
             ),
             codex_poll_seconds=_number(
-                "CODEX_RATE_LIMIT_POLL_SECONDS", 1800.0, minimum=1.0
+                "CODEX_RATE_LIMIT_POLL_SECONDS", 900.0, minimum=1.0
             ),
             state_path=_runtime_path(
                 "CODEX_NOTIFICATION_STATE",

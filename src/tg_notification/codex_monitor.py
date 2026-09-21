@@ -19,7 +19,9 @@ from .codex_app_server import (
 from .sinks import NotificationSink
 
 LOGGER = logging.getLogger(__name__)
-PRE_RESET_SECONDS = 300
+FIVE_HOUR_PRE_RESET_SECONDS = 600
+WEEKLY_PRE_RESET_SECONDS = 1_200
+DEFAULT_PRE_RESET_SECONDS = 300
 RESET_CONFIRMATION_DELAY_SECONDS = 15
 WEEKLY_WINDOW_MINUTES = 10_080
 ACCOUNT_ID_DISPLAY_LENGTH = 8
@@ -215,9 +217,10 @@ def _reset_message(snapshot: RateLimitSnapshot) -> str:
 
 
 def _pre_reset_message(snapshot: RateLimitSnapshot) -> str:
+    minutes = _pre_reset_seconds(snapshot) // 60
     return (
         f"Das {_window_description(snapshot)} von Codex/Work wird voraussichtlich "
-        "in 5 Minuten zurückgesetzt.\n"
+        f"in {minutes} Minuten zurückgesetzt.\n"
         f"Aktuelle Nutzung: {snapshot.used_percent:g} %."
     )
 
@@ -233,6 +236,14 @@ def _scheduled_reset_message(snapshot: RateLimitSnapshot) -> str:
 def _reset_relevant(snapshot: RateLimitSnapshot) -> bool:
     """Only schedule reset work after the current window has been used."""
     return snapshot.used_percent > 0
+
+
+def _pre_reset_seconds(snapshot: RateLimitSnapshot) -> int:
+    if snapshot.window_duration_minutes == 300:
+        return FIVE_HOUR_PRE_RESET_SECONDS
+    if snapshot.window_duration_minutes == WEEKLY_WINDOW_MINUTES:
+        return WEEKLY_PRE_RESET_SECONDS
+    return DEFAULT_PRE_RESET_SECONDS
 
 
 def _window_name(window: RateLimitWindow) -> str:
@@ -437,7 +448,7 @@ class CodexRateLimitMonitor:
         ):
             return None
         now = time.time()
-        pre_reset_at = snapshot.resets_at - PRE_RESET_SECONDS
+        pre_reset_at = snapshot.resets_at - _pre_reset_seconds(snapshot)
         if (
             last_pre_reset_notified != snapshot.resets_at
             and pre_reset_at <= now < snapshot.resets_at
@@ -487,7 +498,9 @@ class CodexRateLimitMonitor:
         now = time.time()
         if (
             last_pre_reset_notified != snapshot.resets_at
-            and snapshot.resets_at - PRE_RESET_SECONDS <= now < snapshot.resets_at
+            and snapshot.resets_at - _pre_reset_seconds(snapshot)
+            <= now
+            < snapshot.resets_at
         ):
             await self._sink.send_text(
                 self._notification_prefix() + _pre_reset_message(snapshot)
