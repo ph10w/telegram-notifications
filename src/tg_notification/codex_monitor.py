@@ -22,6 +22,7 @@ LOGGER = logging.getLogger(__name__)
 FIVE_HOUR_PRE_RESET_SECONDS = 600
 WEEKLY_PRE_RESET_SECONDS = 1_200
 DEFAULT_PRE_RESET_SECONDS = 300
+MAX_OVERDUE_RESET_NOTIFICATION_SECONDS = 3_600
 RESET_CONFIRMATION_DELAY_SECONDS = 15
 WEEKLY_WINDOW_MINUTES = 10_080
 ACCOUNT_ID_DISPLAY_LENGTH = 8
@@ -238,6 +239,13 @@ def _reset_relevant(snapshot: RateLimitSnapshot) -> bool:
     return snapshot.used_percent > 0
 
 
+def _reset_notification_is_timely(resets_at: int | None, now: float) -> bool:
+    return (
+        resets_at is None
+        or now <= resets_at + MAX_OVERDUE_RESET_NOTIFICATION_SECONDS
+    )
+
+
 def _pre_reset_seconds(snapshot: RateLimitSnapshot) -> int:
     if snapshot.window_duration_minutes == 300:
         return FIVE_HOUR_PRE_RESET_SECONDS
@@ -403,6 +411,7 @@ class CodexRateLimitMonitor:
             _reset_detected(previous, snapshot)
             and previous is not None
             and previous.resets_at != last_reset_notified
+            and _reset_notification_is_timely(previous.resets_at, time.time())
         ):
             await self._sink.send_text(
                 self._notification_prefix() + _reset_message(snapshot)
@@ -448,6 +457,8 @@ class CodexRateLimitMonitor:
         ):
             return None
         now = time.time()
+        if not _reset_notification_is_timely(snapshot.resets_at, now):
+            return None
         pre_reset_at = snapshot.resets_at - _pre_reset_seconds(snapshot)
         if (
             last_pre_reset_notified != snapshot.resets_at
@@ -496,6 +507,8 @@ class CodexRateLimitMonitor:
         ):
             return False
         now = time.time()
+        if not _reset_notification_is_timely(snapshot.resets_at, now):
+            return False
         if (
             last_pre_reset_notified != snapshot.resets_at
             and snapshot.resets_at - _pre_reset_seconds(snapshot)

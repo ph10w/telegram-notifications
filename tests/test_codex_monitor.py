@@ -157,6 +157,38 @@ class CodexRateLimitMonitorTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("in 10 Minuten", sink.messages[0])
             self.assertIn("wird jetzt", sink.messages[1])
 
+    async def test_does_not_send_a_reset_notification_more_than_one_hour_late(
+        self,
+    ) -> None:
+        reset_at = 2_000_000_000
+        with tempfile.TemporaryDirectory() as directory:
+            sink = RecordingSink()
+            monitor = CodexRateLimitMonitor(
+                reader=RecordingReader([]),
+                sink=sink,
+                state_path=Path(directory) / "state.json",
+            )
+            with patch(
+                "tg_notification.codex_monitor.time.time",
+                return_value=reset_at + 3_601,
+            ):
+                await monitor.observe(
+                    _rate_limits(used_percent=100, resets_at=reset_at)
+                )
+                self.assertFalse(
+                    await monitor._send_due_scheduled_notifications()
+                )
+                self.assertFalse(
+                    await monitor.observe(
+                        _rate_limits(
+                            used_percent=0,
+                            resets_at=reset_at + 18_000,
+                        )
+                    )
+                )
+
+            self.assertEqual(sink.messages, [])
+
     async def test_sends_weekly_pre_reset_and_predicted_reset_notifications_once(self) -> None:
         primary_reset_at = 2_000_018_000
         weekly_reset_at = 2_000_000_000
@@ -314,8 +346,12 @@ class CodexRateLimitMonitorTests(unittest.IsolatedAsyncioTestCase):
             await monitor.check_once()
 
             self.assertEqual(set(monitor._monitors), {"account-active", "account-inactive"})
-            for saved_monitor in monitor._monitors.values():
-                await saved_monitor._send_due_scheduled_notifications()
+            with patch(
+                "tg_notification.codex_monitor.time.time",
+                return_value=inactive_reset + 3_600,
+            ):
+                for saved_monitor in monitor._monitors.values():
+                    await saved_monitor._send_due_scheduled_notifications()
             self.assertEqual(len(sink.messages), 1)
             self.assertIn("Konto account-…", sink.messages[0])
             payload = json.loads(state_path.read_text(encoding="utf-8"))
@@ -362,9 +398,13 @@ class CodexRateLimitMonitorTests(unittest.IsolatedAsyncioTestCase):
             )
 
             monitor._ensure_saved_account_monitors()
-            await monitor._monitor_for(
-                "account-inactive"
-            )._send_due_scheduled_notifications()
+            with patch(
+                "tg_notification.codex_monitor.time.time",
+                return_value=reset_at + 3_600,
+            ):
+                await monitor._monitor_for(
+                    "account-inactive"
+                )._send_due_scheduled_notifications()
 
             self.assertEqual(len(sink.messages), 1)
             self.assertIn("Konto inactive@example.com", sink.messages[0])
