@@ -38,10 +38,10 @@ when its `last_refresh` is newer. It launches a short-lived local Codex app
 server for the currently signed-in account profile per poll, reads both
 observed usage windows, persists them with a per-poll `last_polled_at`
 timestamp under the respective account ID in one JSON state file,
-and schedules pre-reset, predicted-reset, and confirmation checks. A missed
-predicted-reset notification is sent for at most one hour after its reset time.
-Monitor
-instances for the other saved accounts are created as well, so their
+and schedules pre-reset, predicted-reset, and confirmation checks. Missed
+reset notifications are sent for at most one hour after a five-hour reset or
+eight hours after a weekly reset. Monitor instances for the other saved
+accounts are created as well, so their
 notification timers keep running from the stored reset timestamps without
 polling them. Unused
 windows do not schedule reset work.

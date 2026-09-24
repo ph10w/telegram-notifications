@@ -189,6 +189,78 @@ class CodexRateLimitMonitorTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(sink.messages, [])
 
+    async def test_weekly_reset_notification_is_sent_up_to_eight_hours_late(
+        self,
+    ) -> None:
+        reset_at = 2_000_000_000
+        with tempfile.TemporaryDirectory() as directory:
+            sink = RecordingSink()
+            monitor = CodexRateLimitMonitor(
+                reader=RecordingReader([]),
+                sink=sink,
+                state_path=Path(directory) / "state.json",
+            )
+            await monitor.observe(
+                _primary_and_weekly_rate_limits(
+                    primary_used_percent=0,
+                    primary_resets_at=reset_at + 18_000,
+                    weekly_used_percent=100,
+                    weekly_resets_at=reset_at,
+                )
+            )
+            with patch(
+                "tg_notification.codex_monitor.time.time",
+                return_value=reset_at + 28_800,
+            ):
+                self.assertEqual(
+                    monitor._seconds_until_any_scheduled_notification(), 0.0
+                )
+                self.assertTrue(await monitor._send_due_scheduled_notifications())
+                self.assertFalse(await monitor._send_due_scheduled_notifications())
+
+            self.assertEqual(len(sink.messages), 1)
+            self.assertIn("Wochen-Nutzungsfenster", sink.messages[0])
+
+    async def test_weekly_reset_notification_expires_after_eight_hours(
+        self,
+    ) -> None:
+        reset_at = 2_000_000_000
+        with tempfile.TemporaryDirectory() as directory:
+            sink = RecordingSink()
+            monitor = CodexRateLimitMonitor(
+                reader=RecordingReader([]),
+                sink=sink,
+                state_path=Path(directory) / "state.json",
+            )
+            await monitor.observe(
+                _primary_and_weekly_rate_limits(
+                    primary_used_percent=0,
+                    primary_resets_at=reset_at + 18_000,
+                    weekly_used_percent=100,
+                    weekly_resets_at=reset_at,
+                )
+            )
+            with patch(
+                "tg_notification.codex_monitor.time.time",
+                return_value=reset_at + 28_801,
+            ):
+                self.assertIsNone(
+                    monitor._seconds_until_any_scheduled_notification()
+                )
+                self.assertFalse(await monitor._send_due_scheduled_notifications())
+                self.assertFalse(
+                    await monitor.observe(
+                        _primary_and_weekly_rate_limits(
+                            primary_used_percent=0,
+                            primary_resets_at=reset_at + 18_000,
+                            weekly_used_percent=0,
+                            weekly_resets_at=reset_at + 604_800,
+                        )
+                    )
+                )
+
+            self.assertEqual(sink.messages, [])
+
     async def test_sends_weekly_pre_reset_and_predicted_reset_notifications_once(self) -> None:
         primary_reset_at = 2_000_018_000
         weekly_reset_at = 2_000_000_000
