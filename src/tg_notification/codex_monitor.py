@@ -22,8 +22,8 @@ LOGGER = logging.getLogger(__name__)
 FIVE_HOUR_PRE_RESET_SECONDS = 600
 WEEKLY_PRE_RESET_SECONDS = 1_200
 DEFAULT_PRE_RESET_SECONDS = 300
-FIVE_HOUR_MAX_OVERDUE_RESET_SECONDS = 3_600
-WEEKLY_MAX_OVERDUE_RESET_SECONDS = 28_800
+FIVE_HOUR_RESET_GRACE_HOURS = 1
+WEEKLY_RESET_GRACE_HOURS = 18
 RESET_CONFIRMATION_DELAY_SECONDS = 15
 WEEKLY_WINDOW_MINUTES = 10_080
 ACCOUNT_ID_DISPLAY_LENGTH = 8
@@ -240,15 +240,20 @@ def _reset_relevant(snapshot: RateLimitSnapshot) -> bool:
     return snapshot.used_percent > 0
 
 
+def _weekly_capacity_exhausted(snapshot: RateLimitSnapshot | None) -> bool:
+    """A five-hour reset is meaningless while the weekly quota is used up."""
+    return snapshot is not None and snapshot.used_percent >= 100
+
+
 def _reset_notification_is_timely(snapshot: RateLimitSnapshot, now: float) -> bool:
-    max_overdue_seconds = (
-        WEEKLY_MAX_OVERDUE_RESET_SECONDS
+    grace_hours = (
+        WEEKLY_RESET_GRACE_HOURS
         if snapshot.window_duration_minutes == WEEKLY_WINDOW_MINUTES
-        else FIVE_HOUR_MAX_OVERDUE_RESET_SECONDS
+        else FIVE_HOUR_RESET_GRACE_HOURS
     )
     return (
         snapshot.resets_at is None
-        or now <= snapshot.resets_at + max_overdue_seconds
+        or now <= snapshot.resets_at + grace_hours * 3_600
     )
 
 
@@ -418,6 +423,7 @@ class CodexRateLimitMonitor:
             and previous is not None
             and previous.resets_at != last_reset_notified
             and _reset_notification_is_timely(previous, time.time())
+            and not self._five_hour_reset_suppressed_by_weekly(payload)
         ):
             await self._sink.send_text(
                 self._notification_prefix() + _reset_message(snapshot)
@@ -454,12 +460,44 @@ class CodexRateLimitMonitor:
         available_delays = [delay for delay in delays if delay is not None]
         return min(available_delays) if available_delays else None
 
+    def _weekly_monitor(self) -> "CodexRateLimitMonitor | None":
+        if self._window_minutes == WEEKLY_WINDOW_MINUTES:
+            return self
+        for monitor in self._additional_monitors:
+            if monitor._window_minutes == WEEKLY_WINDOW_MINUTES:
+                return monitor
+        return None
+
+    def _five_hour_reset_suppressed(self) -> bool:
+        """Suppress 5h reset notifications while the weekly quota is used up."""
+        if self._window_minutes != 300:
+            return False
+        weekly_monitor = self._weekly_monitor()
+        if weekly_monitor is None:
+            return False
+        weekly_snapshot, *_ = weekly_monitor._state.load()
+        return _weekly_capacity_exhausted(weekly_snapshot)
+
+    def _five_hour_reset_suppressed_by_weekly(self, payload: object) -> bool:
+        """Same as `_five_hour_reset_suppressed`, using a freshly read payload.
+
+        Used within a single `observe()` call, where the sibling weekly
+        monitor's stored state may not have been refreshed yet.
+        """
+        if self._window_minutes != 300:
+            return False
+        weekly_snapshot = extract_rate_limit_snapshot(
+            payload, limit_id=self._rate_limit_id, window_minutes=WEEKLY_WINDOW_MINUTES
+        )
+        return _weekly_capacity_exhausted(weekly_snapshot)
+
     def _seconds_until_scheduled_notification(self) -> float | None:
         snapshot, last_reset_notified, last_pre_reset_notified, _ = self._state.load()
         if (
             snapshot is None
             or snapshot.resets_at is None
             or not _reset_relevant(snapshot)
+            or self._five_hour_reset_suppressed()
         ):
             return None
         now = time.time()
@@ -510,6 +548,7 @@ class CodexRateLimitMonitor:
             snapshot is None
             or snapshot.resets_at is None
             or not _reset_relevant(snapshot)
+            or self._five_hour_reset_suppressed()
         ):
             return False
         now = time.time()

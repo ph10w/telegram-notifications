@@ -40,8 +40,12 @@ observed usage windows, persists them with a per-poll `last_polled_at`
 timestamp under the respective account ID in one JSON state file,
 and schedules pre-reset, predicted-reset, and confirmation checks. Missed
 reset notifications are sent for at most one hour after a five-hour reset or
-eight hours after a weekly reset. Monitor instances for the other saved
-accounts are created as well, so their
+eighteen hours after a weekly reset. A five-hour reset notification (pending,
+pre-reset, predicted-reset, or confirmed) is suppressed while the weekly
+window is fully used up, since the account cannot make use of the five-hour
+reset in that case; the suppression is re-evaluated on every check, so it
+lifts automatically once weekly usage drops back below 100%. Monitor instances
+for the other saved accounts are created as well, so their
 notification timers keep running from the stored reset timestamps without
 polling them. Unused
 windows do not schedule reset work.
