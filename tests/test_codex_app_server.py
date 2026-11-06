@@ -1,11 +1,14 @@
+import subprocess
+import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from pathlib import Path
 
 from tg_notification.codex_accounts import CodexAccountProfile
 from tg_notification.codex_app_server import (
     CodexAccountRateLimitReader,
+    CodexAppServerClient,
     CodexAppServerRateLimitReader,
     _app_server_subprocess_options,
     extract_rate_limit_snapshot,
@@ -107,6 +110,47 @@ class CodexAppServerRateLimitReaderTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(await reader.read_active_rate_limits(), ())
+
+
+class AppServerShutdownTests(unittest.IsolatedAsyncioTestCase):
+    async def test_closes_stdin_before_waiting_for_graceful_exit(self) -> None:
+        process = Mock()
+
+        async def communicate() -> None:
+            process.stdin.close.assert_called_once_with()
+
+        process.communicate = AsyncMock(side_effect=communicate)
+        client = CodexAppServerClient(("codex", "app-server"))
+        client._process = process
+
+        await client.close()
+
+        process.communicate.assert_awaited_once_with()
+        process.terminate.assert_not_called()
+        process.kill.assert_not_called()
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows process-tree cleanup")
+    async def test_terminates_the_windows_tree_if_graceful_exit_times_out(self) -> None:
+        process = Mock(pid=123, returncode=None)
+        process.communicate = AsyncMock(side_effect=[TimeoutError(), (b"", None)])
+        client = CodexAppServerClient(("codex", "app-server"))
+        client._process = process
+
+        with patch("tg_notification.codex_app_server.subprocess.run") as run:
+            await client.close()
+
+        run.assert_called_once_with(
+            ["taskkill.exe", "/PID", "123", "/T", "/F"],
+            check=True,
+            timeout=5,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        process.stdin.close.assert_called_once_with()
+        self.assertEqual(process.communicate.await_count, 2)
+        process.terminate.assert_not_called()
+        process.kill.assert_not_called()
 
 
 class ExtractRateLimitWindowsTests(unittest.TestCase):

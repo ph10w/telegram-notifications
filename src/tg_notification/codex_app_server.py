@@ -5,6 +5,7 @@ import math
 import os
 import subprocess
 import sys
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Protocol
 
@@ -12,6 +13,7 @@ from .errors import CodexAppServerError
 from .codex_accounts import CodexAccountProfileStore
 
 LOGGER = logging.getLogger(__name__)
+APP_SERVER_SHUTDOWN_TIMEOUT = 5
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,7 +181,7 @@ class CodexAppServerClient:
                 },
             )
             await self._send({"method": "initialized", "params": {}})
-        except Exception:
+        except (Exception, asyncio.CancelledError):
             await self.close()
             raise
 
@@ -216,14 +218,60 @@ class CodexAppServerClient:
     async def close(self) -> None:
         process = self._process
         self._process = None
-        if process is None or process.returncode is not None:
+        if process is None:
             return
-        process.terminate()
+        if process.stdin is not None:
+            process.stdin.close()
         try:
-            await asyncio.wait_for(process.wait(), timeout=5)
-        except asyncio.TimeoutError:
-            process.kill()
-            await process.wait()
+            await asyncio.wait_for(
+                process.communicate(), timeout=APP_SERVER_SHUTDOWN_TIMEOUT
+            )
+            return
+        except TimeoutError:
+            pass
+
+        if sys.platform == "win32":
+            if process.returncode is not None:
+                raise CodexAppServerError(
+                    "Der Codex-Launcher wurde beendet, aber seine Ausgabe blieb offen."
+                )
+            # Keep the launcher alive until taskkill can find its descendants.
+            try:
+                await asyncio.to_thread(
+                    subprocess.run,
+                    ["taskkill.exe", "/PID", str(process.pid), "/T", "/F"],
+                    check=True,
+                    timeout=APP_SERVER_SHUTDOWN_TIMEOUT,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    **_app_server_subprocess_options(),
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                if process.returncode is None:
+                    raise CodexAppServerError(
+                        "Der Windows-Prozessbaum des Codex-App-Servers konnte "
+                        "nicht beendet werden."
+                    ) from exc
+        else:
+            with suppress(ProcessLookupError):
+                process.terminate()
+            try:
+                await asyncio.wait_for(
+                    process.communicate(), timeout=APP_SERVER_SHUTDOWN_TIMEOUT
+                )
+                return
+            except TimeoutError:
+                with suppress(ProcessLookupError):
+                    process.kill()
+
+        try:
+            await asyncio.wait_for(
+                process.communicate(), timeout=APP_SERVER_SHUTDOWN_TIMEOUT
+            )
+        except TimeoutError as exc:
+            raise CodexAppServerError(
+                "Der Codex-App-Server wurde nicht rechtzeitig beendet."
+            ) from exc
 
     async def _request(self, method: str, params: dict[str, object]) -> object:
         request_id = self._next_request_id
