@@ -8,3 +8,7 @@ class TelegramNotificationError(RuntimeError):
 
 class CodexAppServerError(RuntimeError):
     """The Codex app-server could not be started or queried."""
+
+
+class GeminiUsageError(RuntimeError):
+    """The local Antigravity/Gemini CLI could not be queried for usage."""

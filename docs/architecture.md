@@ -15,7 +15,7 @@
 
 `tg_forwarder` contains forwarder-specific policy, SQLite state, reset planning,
 and runtime CLI orchestration. `tg_notification` contains general notification
-sinks and the Codex rate-limit monitor. `tg_setup` contains interactive account
+sinks and the Codex and Gemini rate-limit monitors. `tg_setup` contains interactive account
 login, dialog listing, and setup of the bot shared by both applications. The
 application packages do not depend on each other's runtime code.
 
@@ -49,6 +49,18 @@ for the other saved accounts are created as well, so their
 notification timers keep running from the stored reset timestamps without
 polling them. Unused
 windows do not schedule reset work.
+
+When `GEMINI_MONITOR_ENABLED` is enabled (the default), `tg-notification run`
+concurrently runs a Gemini Models quota monitor alongside the Codex monitor.
+Each poll invokes the local Antigravity CLI (`agy`) non-interactively with
+`--settings '{"modelProvider":""}' -p /usage --output-format json` (and with
+`GEMINI_API_KEY` / `GOOGLE_API_KEY` stripped from the subprocess environment so
+the signed-in Antigravity backend is queried), normalizes the `5h` and `weekly`
+buckets for the configured model group into the same rate-limit snapshot model,
+persists state to `GEMINI_NOTIFICATION_STATE`, and applies the same pre-reset,
+predicted-reset, confirmation-poll, grace-period, and weekly-exhaustion
+suppression rules. Transient CLI errors are logged as warnings without stopping
+the monitor loop.
 
 ## Design constraints
 

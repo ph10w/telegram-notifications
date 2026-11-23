@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import math
 import time
 from dataclasses import asdict
 from datetime import datetime
@@ -19,7 +20,7 @@ from .codex_app_server import (
 from .sinks import NotificationSink
 
 LOGGER = logging.getLogger(__name__)
-FIVE_HOUR_PRE_RESET_SECONDS = 600
+FIVE_HOUR_PRE_RESET_SECONDS = 900
 WEEKLY_PRE_RESET_SECONDS = 1_200
 DEFAULT_PRE_RESET_SECONDS = 300
 FIVE_HOUR_RESET_GRACE_HOURS = 1
@@ -193,18 +194,26 @@ def _reset_detected(
     return True
 
 
-def _window_description(snapshot: RateLimitSnapshot) -> str:
+def _window_description(
+    snapshot: RateLimitSnapshot, *, fallback_label: str = "Codex"
+) -> str:
     if snapshot.window_duration_minutes == 300:
         return "5-Stunden-Nutzungsfenster"
     if snapshot.window_duration_minutes == WEEKLY_WINDOW_MINUTES:
         return "Wochen-Nutzungsfenster"
-    return "Codex-Nutzungsfenster"
+    return f"{fallback_label}-Nutzungsfenster"
 
 
-def _reset_message(snapshot: RateLimitSnapshot) -> str:
+def _reset_message(
+    snapshot: RateLimitSnapshot,
+    *,
+    service_name: str = "Codex/Work",
+    fallback_label: str = "Codex",
+) -> str:
     available_percent = max(0.0, 100.0 - snapshot.used_percent)
     message = (
-        f"Das {_window_description(snapshot)} von Codex/Work wurde zurückgesetzt.\n"
+        f"Das {_window_description(snapshot, fallback_label=fallback_label)} "
+        f"von {service_name} wurde zurückgesetzt.\n"
         f"Aktuelle Nutzung: {snapshot.used_percent:g} % "
         f"({available_percent:g} % verfügbar)."
     )
@@ -212,24 +221,43 @@ def _reset_message(snapshot: RateLimitSnapshot) -> str:
         try:
             next_reset = datetime.fromtimestamp(snapshot.resets_at).astimezone()
         except (OSError, OverflowError, ValueError):
-            LOGGER.warning("Ungültiger Codex-Resetzeitpunkt: %s", snapshot.resets_at)
+            LOGGER.warning(
+                "Ungültiger %s-Resetzeitpunkt: %s", fallback_label, snapshot.resets_at
+            )
         else:
             message += f"\nNächster Reset: {next_reset:%Y-%m-%d %H:%M:%S %Z}"
     return message
 
 
-def _pre_reset_message(snapshot: RateLimitSnapshot) -> str:
-    minutes = _pre_reset_seconds(snapshot) // 60
+def _pre_reset_message(
+    snapshot: RateLimitSnapshot,
+    *,
+    now: float | None = None,
+    service_name: str = "Codex/Work",
+    fallback_label: str = "Codex",
+) -> str:
+    if now is not None and snapshot.resets_at is not None:
+        minutes = max(1, math.ceil((snapshot.resets_at - now) / 60))
+    else:
+        minutes = _pre_reset_seconds(snapshot) // 60
+    unit = "Minute" if minutes == 1 else "Minuten"
     return (
-        f"Das {_window_description(snapshot)} von Codex/Work wird voraussichtlich "
-        f"in {minutes} Minuten zurückgesetzt.\n"
+        f"Das {_window_description(snapshot, fallback_label=fallback_label)} "
+        f"von {service_name} wird voraussichtlich "
+        f"in {minutes} {unit} zurückgesetzt.\n"
         f"Aktuelle Nutzung: {snapshot.used_percent:g} %."
     )
 
 
-def _scheduled_reset_message(snapshot: RateLimitSnapshot) -> str:
+def _scheduled_reset_message(
+    snapshot: RateLimitSnapshot,
+    *,
+    service_name: str = "Codex/Work",
+    fallback_label: str = "Codex",
+) -> str:
     return (
-        f"Das {_window_description(snapshot)} von Codex/Work wird jetzt gemäß dem "
+        f"Das {_window_description(snapshot, fallback_label=fallback_label)} "
+        f"von {service_name} wird jetzt gemäß dem "
         "zuletzt gelesenen Resetzeitpunkt zurückgesetzt. Der nächste Poll "
         "bestätigt den aktuellen Nutzungsstand."
     )
@@ -317,6 +345,9 @@ class CodexRateLimitMonitor:
         additional_window_minutes: tuple[int, ...] = (WEEKLY_WINDOW_MINUTES,),
         account_id: str | None = None,
         account_email: str | None = None,
+        service_name: str = "Codex/Work",
+        notification_title: str = "Codex-Nutzung",
+        log_label: str = "Codex",
     ) -> None:
         self._reader = reader
         self._sink = sink
@@ -330,6 +361,9 @@ class CodexRateLimitMonitor:
         self._rate_limit_id = rate_limit_id
         self._window_minutes = window_minutes
         self._poll_seconds = poll_seconds
+        self._service_name = service_name
+        self._notification_title = notification_title
+        self._log_label = log_label
         self._additional_monitors = tuple(
             CodexRateLimitMonitor(
                 reader,
@@ -341,6 +375,9 @@ class CodexRateLimitMonitor:
                 additional_window_minutes=(),
                 account_id=account_id,
                 account_email=self._account_email,
+                service_name=service_name,
+                notification_title=notification_title,
+                log_label=log_label,
             )
             for additional_window in additional_window_minutes
             if additional_window != window_minutes
@@ -348,7 +385,8 @@ class CodexRateLimitMonitor:
 
     async def run(self) -> None:
         LOGGER.info(
-            "Codex-Nutzungsmonitor gestartet; Abfrage alle %g Sekunden.",
+            "%s-Nutzungsmonitor gestartet; Abfrage alle %g Sekunden.",
+            self._log_label,
             self._poll_seconds,
         )
         await self.check_once(report_limits=True)
@@ -386,12 +424,13 @@ class CodexRateLimitMonitor:
             windows = extract_rate_limit_windows(payload, limit_id=self._rate_limit_id)
             if windows:
                 LOGGER.info(
-                    "Codex-Nutzungsstand beim Start:\n%s",
+                    f"{self._log_label}-Nutzungsstand beim Start:\n%s",
                     "\n".join(_window_status(window) for window in windows),
                 )
             else:
                 LOGGER.warning(
-                    "Der App-Server lieferte beim Start keine lesbaren Codex-Nutzungsfenster."
+                    "Beim Start wurden keine lesbaren %s-Nutzungsfenster geliefert.",
+                    self._log_label,
                 )
         return await self.observe(payload)
 
@@ -408,7 +447,11 @@ class CodexRateLimitMonitor:
             window_minutes=self._window_minutes,
         )
         if snapshot is None:
-            LOGGER.debug("Kein passendes Codex-5-Stunden-Rate-Limit gefunden.")
+            LOGGER.debug(
+                "Kein passendes %s-Rate-Limit für Fenster %s min gefunden.",
+                self._log_label,
+                self._window_minutes,
+            )
             return False
 
         (
@@ -426,7 +469,12 @@ class CodexRateLimitMonitor:
             and not self._five_hour_reset_suppressed_by_weekly(payload)
         ):
             await self._sink.send_text(
-                self._notification_prefix() + _reset_message(snapshot)
+                self._notification_prefix()
+                + _reset_message(
+                    snapshot,
+                    service_name=self._service_name,
+                    fallback_label=self._log_label,
+                )
             )
             last_reset_notified = previous.resets_at
             notified_now = True
@@ -561,7 +609,13 @@ class CodexRateLimitMonitor:
             < snapshot.resets_at
         ):
             await self._sink.send_text(
-                self._notification_prefix() + _pre_reset_message(snapshot)
+                self._notification_prefix()
+                + _pre_reset_message(
+                    snapshot,
+                    now=now,
+                    service_name=self._service_name,
+                    fallback_label=self._log_label,
+                )
             )
             self._state.save(
                 snapshot,
@@ -572,7 +626,12 @@ class CodexRateLimitMonitor:
             return True
         if last_reset_notified != snapshot.resets_at and now >= snapshot.resets_at:
             await self._sink.send_text(
-                self._notification_prefix() + _scheduled_reset_message(snapshot)
+                self._notification_prefix()
+                + _scheduled_reset_message(
+                    snapshot,
+                    service_name=self._service_name,
+                    fallback_label=self._log_label,
+                )
             )
             self._state.save(
                 snapshot,
@@ -624,10 +683,13 @@ class CodexRateLimitMonitor:
 
     def _notification_prefix(self) -> str:
         if self._account_id is None:
-            return "Codex-Nutzung\n\n"
+            return f"{self._notification_title}\n\n"
         if self._account_email is not None:
-            return f"Codex-Nutzung – Konto {self._account_email}\n\n"
-        return f"Codex-Nutzung – Konto {_display_account_id(self._account_id)}\n\n"
+            return f"{self._notification_title} – Konto {self._account_email}\n\n"
+        return (
+            f"{self._notification_title} – Konto "
+            f"{_display_account_id(self._account_id)}\n\n"
+        )
 
     def set_account_email(self, account_email: str | None) -> None:
         if account_email is None:

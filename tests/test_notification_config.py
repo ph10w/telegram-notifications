@@ -4,6 +4,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tg_notification.config import NotificationConfig
+from tg_notification.errors import NotificationConfigError
+from tg_notification.gemini_usage import DEFAULT_GEMINI_USAGE_ARGS, DEFAULT_GEMINI_USAGE_COMMAND
 
 
 class NotificationConfigTests(unittest.TestCase):
@@ -45,6 +47,52 @@ class NotificationConfigTests(unittest.TestCase):
                 config = NotificationConfig.from_env()
 
         self.assertEqual(config.codex_app_server_command, ("codex", "app-server"))
+        self.assertTrue(config.gemini_enabled)
+        self.assertEqual(config.gemini_usage_command, DEFAULT_GEMINI_USAGE_COMMAND)
+        self.assertEqual(config.gemini_usage_group, "Gemini Models")
+        self.assertEqual(config.gemini_poll_seconds, 900.0)
+        self.assertEqual(config.gemini_state_path, Path(r"D:\runtime\gemini-rate-limit.json"))
+
+    def test_gemini_settings_can_be_configured_and_disabled(self) -> None:
+        environment = {
+            "TELEGRAM_NOTIFICATION_BOT_TOKEN": "token",
+            "TELEGRAM_GENERAL_NOTIFICATION_CHAT": "-100123",
+            "CODEX_NOTIFICATION_STATE": r"D:\runtime\state.json",
+            "TELEGRAM_NOTIFICATION_LOG": r"D:\runtime\notifications.log",
+            "GEMINI_MONITOR_ENABLED": "false",
+            "GEMINI_USAGE_EXECUTABLE": r"C:\Tools\agy.exe",
+            "GEMINI_USAGE_GROUP": "Gemini Models",
+            "GEMINI_RATE_LIMIT_POLL_SECONDS": "300",
+            "GEMINI_NOTIFICATION_STATE": r"D:\runtime\custom-gemini.json",
+        }
+        with patch.dict(os.environ, environment, clear=True):
+            with patch(
+                "tg_notification.config.find_dotenv", return_value=""
+            ), patch("tg_notification.config.load_dotenv"):
+                config = NotificationConfig.from_env()
+
+        self.assertFalse(config.gemini_enabled)
+        self.assertEqual(
+            config.gemini_usage_command,
+            (r"C:\Tools\agy.exe", *DEFAULT_GEMINI_USAGE_ARGS),
+        )
+        self.assertEqual(config.gemini_poll_seconds, 300.0)
+        self.assertEqual(config.gemini_state_path, Path(r"D:\runtime\custom-gemini.json"))
+
+    def test_invalid_gemini_enabled_flag_raises_config_error(self) -> None:
+        environment = {
+            "TELEGRAM_NOTIFICATION_BOT_TOKEN": "token",
+            "TELEGRAM_GENERAL_NOTIFICATION_CHAT": "-100123",
+            "CODEX_NOTIFICATION_STATE": r"D:\runtime\state.json",
+            "TELEGRAM_NOTIFICATION_LOG": r"D:\runtime\notifications.log",
+            "GEMINI_MONITOR_ENABLED": "maybe",
+        }
+        with patch.dict(os.environ, environment, clear=True):
+            with patch(
+                "tg_notification.config.find_dotenv", return_value=""
+            ), patch("tg_notification.config.load_dotenv"):
+                with self.assertRaises(NotificationConfigError):
+                    NotificationConfig.from_env()
 
 
 if __name__ == "__main__":

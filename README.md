@@ -4,7 +4,7 @@ Two runtime packages and one setup package share Telegram access through
 `tg_api`:
 
 - `tg-forwarder` monitors Telegram sources and forwards voice messages.
-- `tg-notification` sends general notifications and monitors Codex/Work usage.
+- `tg-notification` sends general notifications and monitors Codex/Work and Gemini Models usage.
 - `tg-setup` performs interactive Telegram account and bot provisioning.
 
 ## Requirements
@@ -66,6 +66,12 @@ the directory containing that file.
 | `CODEX_RATE_LIMIT_ID` | Notifications | Codex rate-limit identifier | `codex` |
 | `CODEX_RATE_LIMIT_POLL_SECONDS` | Notifications | Usage polling interval | `900` |
 | `CODEX_NOTIFICATION_STATE` | Notifications | Per-account monitor state | `data/codex-rate-limit.json` |
+| `GEMINI_MONITOR_ENABLED` | Notifications | Enable Gemini Models 5h/weekly monitor | `true` |
+| `GEMINI_USAGE_EXECUTABLE` | Notifications | Absolute `agy` executable; takes precedence over command | — |
+| `GEMINI_USAGE_COMMAND` | Notifications | Antigravity CLI `/usage` command | `agy --settings '{"modelProvider":""}' -p /usage --output-format json --print-timeout 15s` |
+| `GEMINI_USAGE_GROUP` | Notifications | Quota group name in `/usage` output | `Gemini Models` |
+| `GEMINI_RATE_LIMIT_POLL_SECONDS` | Notifications | Gemini usage polling interval | `900` |
+| `GEMINI_NOTIFICATION_STATE` | Notifications | Gemini monitor state | `data/gemini-rate-limit.json` |
 | `TELEGRAM_NOTIFICATION_LOG` | Notifications | Notification log | `data/logs/telegram-notifications.log` |
 
 Treat the bot token and Telegram session as passwords. Do not commit `.env` or
@@ -85,13 +91,13 @@ tg-forwarder reset=1W --source=-1001234567890
 tg-notification send-test
 tg-notification send "Eigene Benachrichtigung"
 
-# Codex/Work 5-hour and weekly usage monitor
+# Codex/Work and Gemini Models 5-hour and weekly usage monitor
 tg-notification run
 ```
 
 The usage monitor saves each active local Codex login as a private profile in
 `data/codex-accounts/<account_id>/`, then starts a fresh local `codex app-server`
-for the currently signed-in profile per poll. It sends reminders 10 minutes
+for the currently signed-in profile per poll. It sends reminders 15 minutes
 before each used 5-hour reset, 20 minutes before each used weekly reset, and at
 every predicted reset. To add another account, sign in to it in Codex; the next
 monitor poll stores its profile. Only the currently signed-in account is polled;

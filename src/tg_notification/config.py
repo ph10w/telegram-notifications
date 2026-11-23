@@ -7,6 +7,11 @@ from pathlib import Path
 from dotenv import find_dotenv, load_dotenv
 
 from .errors import NotificationConfigError
+from .gemini_usage import (
+    DEFAULT_GEMINI_USAGE_ARGS,
+    DEFAULT_GEMINI_USAGE_COMMAND,
+    DEFAULT_GEMINI_USAGE_GROUP,
+)
 
 type ChatRef = int | str
 
@@ -41,6 +46,18 @@ def _number(name: str, default: float, *, minimum: float = 0.0) -> float:
     if not math.isfinite(value) or value < minimum:
         raise NotificationConfigError(f"{name} muss mindestens {minimum:g} sein.")
     return value
+
+
+def _bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise NotificationConfigError(f"{name} muss ein Wahrheitswert sein.")
 
 
 def _load_environment() -> Path | None:
@@ -94,6 +111,37 @@ def _app_server_command() -> tuple[str, ...]:
     return command
 
 
+def _gemini_usage_command() -> tuple[str, ...]:
+    executable = os.getenv("GEMINI_USAGE_EXECUTABLE", "").strip()
+    if executable:
+        return executable, *DEFAULT_GEMINI_USAGE_ARGS
+
+    raw = os.getenv("GEMINI_USAGE_COMMAND", "").strip()
+    if not raw:
+        return DEFAULT_GEMINI_USAGE_COMMAND
+    try:
+        command = tuple(shlex.split(raw))
+    except ValueError as exc:
+        raise NotificationConfigError(
+            "GEMINI_USAGE_COMMAND enthält ungültige Anführungszeichen."
+        ) from exc
+    if not command:
+        raise NotificationConfigError("GEMINI_USAGE_COMMAND darf nicht leer sein.")
+    return command
+
+
+def _gemini_state_path(
+    codex_state_path: Path, dotenv_directory: Path | None
+) -> Path:
+    if os.getenv("GEMINI_NOTIFICATION_STATE", "").strip():
+        return _runtime_path(
+            "GEMINI_NOTIFICATION_STATE",
+            "data/gemini-rate-limit.json",
+            dotenv_directory,
+        )
+    return codex_state_path.parent / "gemini-rate-limit.json"
+
+
 @dataclass(frozen=True, slots=True)
 class NotificationConfig:
     bot_token: str
@@ -104,10 +152,20 @@ class NotificationConfig:
     state_path: Path
     log_path: Path
     log_level: str
+    gemini_enabled: bool = True
+    gemini_usage_command: tuple[str, ...] = DEFAULT_GEMINI_USAGE_COMMAND
+    gemini_usage_group: str = DEFAULT_GEMINI_USAGE_GROUP
+    gemini_poll_seconds: float = 900.0
+    gemini_state_path: Path = Path("data/gemini-rate-limit.json")
 
     @classmethod
     def from_env(cls) -> "NotificationConfig":
         dotenv_directory = _load_environment()
+        state_path = _runtime_path(
+            "CODEX_NOTIFICATION_STATE",
+            "data/codex-rate-limit.json",
+            dotenv_directory,
+        )
         return cls(
             bot_token=_required("TELEGRAM_NOTIFICATION_BOT_TOKEN"),
             target_chat=parse_chat_ref(
@@ -120,15 +178,21 @@ class NotificationConfig:
             codex_poll_seconds=_number(
                 "CODEX_RATE_LIMIT_POLL_SECONDS", 900.0, minimum=1.0
             ),
-            state_path=_runtime_path(
-                "CODEX_NOTIFICATION_STATE",
-                "data/codex-rate-limit.json",
-                dotenv_directory,
-            ),
+            state_path=state_path,
             log_path=_runtime_path(
                 "TELEGRAM_NOTIFICATION_LOG",
                 "data/logs/telegram-notifications.log",
                 dotenv_directory,
             ),
             log_level=os.getenv("LOG_LEVEL", "INFO").strip().upper() or "INFO",
+            gemini_enabled=_bool("GEMINI_MONITOR_ENABLED", True),
+            gemini_usage_command=_gemini_usage_command(),
+            gemini_usage_group=(
+                os.getenv("GEMINI_USAGE_GROUP", DEFAULT_GEMINI_USAGE_GROUP).strip()
+                or DEFAULT_GEMINI_USAGE_GROUP
+            ),
+            gemini_poll_seconds=_number(
+                "GEMINI_RATE_LIMIT_POLL_SECONDS", 900.0, minimum=1.0
+            ),
+            gemini_state_path=_gemini_state_path(state_path, dotenv_directory),
         )

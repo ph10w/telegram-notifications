@@ -144,9 +144,9 @@ class CodexRateLimitMonitorTests(unittest.IsolatedAsyncioTestCase):
             )
             await monitor.observe(_rate_limits(used_percent=100, resets_at=reset_at))
 
-            with patch("tg_notification.codex_monitor.time.time", return_value=reset_at - 601):
+            with patch("tg_notification.codex_monitor.time.time", return_value=reset_at - 901):
                 self.assertFalse(await monitor._send_due_scheduled_notifications())
-            with patch("tg_notification.codex_monitor.time.time", return_value=reset_at - 600):
+            with patch("tg_notification.codex_monitor.time.time", return_value=reset_at - 900):
                 self.assertTrue(await monitor._send_due_scheduled_notifications())
                 self.assertFalse(await monitor._send_due_scheduled_notifications())
             with patch("tg_notification.codex_monitor.time.time", return_value=reset_at):
@@ -154,8 +154,42 @@ class CodexRateLimitMonitorTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(await monitor._send_due_scheduled_notifications())
 
             self.assertEqual(len(sink.messages), 2)
-            self.assertIn("in 10 Minuten", sink.messages[0])
+            self.assertIn("in 15 Minuten", sink.messages[0])
             self.assertIn("wird jetzt", sink.messages[1])
+
+    async def test_pre_reset_notification_reports_actual_remaining_minutes(
+        self,
+    ) -> None:
+        reset_at = 2_000_000_000
+        with tempfile.TemporaryDirectory() as directory:
+            sink = RecordingSink()
+            monitor = CodexRateLimitMonitor(
+                reader=RecordingReader([]),
+                sink=sink,
+                state_path=Path(directory) / "state.json",
+            )
+            await monitor.observe(_rate_limits(used_percent=80, resets_at=reset_at))
+
+            with patch("tg_notification.codex_monitor.time.time", return_value=reset_at - 420):
+                self.assertTrue(await monitor._send_due_scheduled_notifications())
+
+            self.assertEqual(len(sink.messages), 1)
+            self.assertIn("in 7 Minuten", sink.messages[0])
+
+        with tempfile.TemporaryDirectory() as directory:
+            sink = RecordingSink()
+            monitor = CodexRateLimitMonitor(
+                reader=RecordingReader([]),
+                sink=sink,
+                state_path=Path(directory) / "state.json",
+            )
+            await monitor.observe(_rate_limits(used_percent=80, resets_at=reset_at))
+
+            with patch("tg_notification.codex_monitor.time.time", return_value=reset_at - 30):
+                self.assertTrue(await monitor._send_due_scheduled_notifications())
+
+            self.assertEqual(len(sink.messages), 1)
+            self.assertIn("in 1 Minute ", sink.messages[0])
 
     async def test_does_not_send_a_reset_notification_more_than_one_hour_late(
         self,

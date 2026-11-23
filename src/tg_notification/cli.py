@@ -4,14 +4,16 @@ import logging
 import sys
 from pathlib import Path
 
+from tg_api.bot_gateway import TelegramBotGateway
+from tg_api.errors import TelegramApiError
+
 from .codex_accounts import CodexAccountProfileStore
 from .codex_app_server import CodexAccountRateLimitReader
 from .codex_monitor import MultiAccountCodexRateLimitMonitor
 from .config import NotificationConfig, NotificationConfigError
-from tg_api.bot_gateway import TelegramBotGateway
-from tg_api.errors import TelegramApiError
-
-from .errors import CodexAppServerError
+from .errors import CodexAppServerError, GeminiUsageError
+from .gemini_monitor import GeminiRateLimitMonitor
+from .gemini_usage import GeminiUsageRateLimitReader
 from .sinks import TelegramNotificationSink
 
 
@@ -25,8 +27,8 @@ def _parser() -> argparse.ArgumentParser:
         nargs="?",
         default="run",
         help=(
-            "Codex-Nutzungsmonitor starten (Standard), eine Testmeldung senden "
-            "oder mit send eine eigene Textmeldung senden."
+            "Codex- und Gemini-Nutzungsmonitor starten (Standard), eine "
+            "Testmeldung senden oder mit send eine eigene Textmeldung senden."
         ),
     )
     parser.add_argument("message", nargs="*", help="Text für den send-Befehl.")
@@ -58,6 +60,38 @@ async def _send_text(config: NotificationConfig, text: str) -> None:
     await sink.send_text(text)
 
 
+async def _run_monitors(config: NotificationConfig) -> None:
+    sink = TelegramNotificationSink(
+        TelegramBotGateway(config.bot_token, config.target_chat)
+    )
+    profile_store = CodexAccountProfileStore(
+        CodexAccountProfileStore.source_home_from_environment(),
+        config.state_path.parent / "codex-accounts",
+    )
+    codex_monitor = MultiAccountCodexRateLimitMonitor(
+        CodexAccountRateLimitReader(config.codex_app_server_command, profile_store),
+        sink,
+        state_path=config.state_path,
+        rate_limit_id=config.codex_rate_limit_id,
+        poll_seconds=config.codex_poll_seconds,
+        profile_store=profile_store,
+    )
+    tasks = [codex_monitor.run()]
+    if config.gemini_enabled:
+        gemini_monitor = GeminiRateLimitMonitor(
+            GeminiUsageRateLimitReader(
+                config.gemini_usage_command,
+                group_name=config.gemini_usage_group,
+            ),
+            sink,
+            state_path=config.gemini_state_path,
+            group_name=config.gemini_usage_group,
+            poll_seconds=config.gemini_poll_seconds,
+        )
+        tasks.append(gemini_monitor.run())
+    await asyncio.gather(*tasks)
+
+
 def main() -> None:
     args = _parser().parse_args()
     try:
@@ -77,30 +111,13 @@ def main() -> None:
                 )
             asyncio.run(_send_text(config, " ".join(args.message)))
         elif args.command == "run":
-            sink = TelegramNotificationSink(
-                TelegramBotGateway(config.bot_token, config.target_chat)
-            )
-            profile_store = CodexAccountProfileStore(
-                CodexAccountProfileStore.source_home_from_environment(),
-                config.state_path.parent / "codex-accounts",
-            )
-            monitor = MultiAccountCodexRateLimitMonitor(
-                CodexAccountRateLimitReader(
-                    config.codex_app_server_command, profile_store
-                ),
-                sink,
-                state_path=config.state_path,
-                rate_limit_id=config.codex_rate_limit_id,
-                poll_seconds=config.codex_poll_seconds,
-                profile_store=profile_store,
-            )
-            asyncio.run(monitor.run())
+            asyncio.run(_run_monitors(config))
         else:
             raise NotificationConfigError(f"Unbekannter Befehl: {args.command}")
     except (NotificationConfigError, ValueError) as exc:
         print(f"Konfigurationsfehler: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
-    except (CodexAppServerError, TelegramApiError) as exc:
+    except (CodexAppServerError, GeminiUsageError, TelegramApiError) as exc:
         print(f"Benachrichtigungsfehler: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
     except KeyboardInterrupt:
